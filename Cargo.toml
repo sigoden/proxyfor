@@ -2,8 +2,13 @@
 name = "midproxy"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+authors = ["sigoden <sigoden@gmail.com>"]
+description = "A cli tool to proxy and analyze HTTP/HTTPS"
+license = "MIT OR Apache-2.0"
+homepage = "https://github.com/sigoden/midproxy"
+repository = "https://github.com/sigoden/midproxy"
+categories = ["command-line-utilities"]
+keywords = ["proxy", "mitm"]
 
 [dependencies]
 anyhow = "1.0"
@@ -18,3 +23,8 @@ hyper-util = { version = "0.1", features = ["server-auto", "client-legacy"] }
 hyper-tls = "0.6.0"
 socket2 = "0.5.6"
 async-compression = { version = "0.4.6", features = ["brotli", "gzip", "deflate", "tokio"] }
+
+[profile.release]
+lto = true
+strip = true
+opt-level = "z"
