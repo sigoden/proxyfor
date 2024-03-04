@@ -1,15 +1,20 @@
 use anyhow::{anyhow, Result};
+use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
 use bytes::Bytes;
 use clap::Parser;
-use hyper::{body::Incoming, service::service_fn, StatusCode};
+use http_body_util::{combinators::BoxBody, BodyExt, Full};
+use hyper::{
+    body::Incoming,
+    header::{CONTENT_ENCODING, HOST},
+    service::service_fn,
+    StatusCode,
+};
 use hyper_tls::HttpsConnector;
 use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder,
 };
-
-use http_body_util::{combinators::BoxBody, BodyExt, Full};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -19,7 +24,7 @@ use std::{
     fmt::Display,
     net::{IpAddr, SocketAddr, TcpListener as StdTcpListener},
 };
-use tokio::{net::TcpListener, task::JoinHandle};
+use tokio::{io::AsyncWriteExt, net::TcpListener, task::JoinHandle};
 
 const MAX_BYTES: usize = 1048576; // 1 Mb
 
@@ -84,7 +89,7 @@ impl Server {
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
-        let url = if !req_path.starts_with("/") {
+        let url = if !req_path.starts_with('/') {
             req_path.clone()
         } else if req_path == "/" {
             base_url.clone()
@@ -108,6 +113,9 @@ REQUEST BODY
 
         let mut builder = hyper::Request::builder().uri(&url).method(method);
         for (key, value) in req_headers.iter() {
+            if key == HOST {
+                continue;
+            }
             builder = builder.header(key.clone(), value.clone());
         }
 
@@ -140,12 +148,21 @@ REQUEST BODY
         let proxy_res_headers = proxy_res.headers().clone();
 
         *res.status_mut() = proxy_res_status;
+        let mut encoding = "";
         for (key, value) in proxy_res_headers.iter() {
+            if key == CONTENT_ENCODING {
+                if let Ok(value) = value.to_str() {
+                    encoding = value;
+                }
+            }
             res.headers_mut().insert(key.clone(), value.clone());
         }
 
         let proxy_res_body = proxy_res.collect().await?.to_bytes();
-        let proxy_res_body_pretty = format_bytes(&proxy_res_body);
+        let decompress_body = decompress(&proxy_res_body, encoding)
+            .await
+            .unwrap_or_else(|| proxy_res_body.to_vec());
+        let proxy_res_body_pretty = format_bytes(&decompress_body);
 
         *res.body_mut() = Full::new(proxy_res_body).boxed();
 
@@ -230,7 +247,31 @@ fn internal_server_error<T: Display>(res: &mut Response, err: T) {
     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 }
 
-fn format_bytes(data: &Bytes) -> String {
+async fn decompress(data: &Bytes, encoding: &str) -> Option<Vec<u8>> {
+    match encoding {
+        "deflate" => decompress_deflate(data).await.ok(),
+        "gzip" => decompress_gzip(data).await.ok(),
+        "br" => decompress_br(data).await.ok(),
+        _ => None,
+    }
+}
+
+macro_rules! decompress_fn {
+    ($fn_name:ident, $decoder:ident) => {
+        async fn $fn_name(in_data: &[u8]) -> Result<Vec<u8>> {
+            let mut decoder = $decoder::new(Vec::new());
+            decoder.write_all(in_data).await?;
+            decoder.shutdown().await?;
+            Ok(decoder.into_inner())
+        }
+    };
+}
+
+decompress_fn!(decompress_deflate, DeflateDecoder);
+decompress_fn!(decompress_gzip, GzipDecoder);
+decompress_fn!(decompress_br, BrotliDecoder);
+
+fn format_bytes(data: &[u8]) -> String {
     let data = &data[0..MAX_BYTES.min(data.len())];
     if let Ok(value) = std::str::from_utf8(data) {
         value.to_string()
