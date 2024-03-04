@@ -36,12 +36,14 @@ async fn main() -> Result<()> {
         .parse()
         .map_err(|_| anyhow!("Invalid bind '{}'", cli.bind))?;
     let running = Arc::new(AtomicBool::new(true));
-    let base_url = if !cli.url.starts_with("http://") && !cli.url.starts_with("https://") {
-        format!("http://{}", cli.url)
-    } else {
-        cli.url.clone()
-    };
-    let handle = serve(addr, cli.port, base_url, running.clone())?;
+    let target = cli.target.map(|url| {
+        if !url.starts_with("http://") && !url.starts_with("https://") {
+            format!("http://{}", url)
+        } else {
+            url
+        }
+    });
+    let handle = serve(addr, cli.port, target, running.clone())?;
     let running = Arc::new(AtomicBool::new(true));
     println!("Listening on {}:{}", cli.bind, cli.port);
     tokio::select! {
@@ -62,20 +64,21 @@ async fn main() -> Result<()> {
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Specify bind address or unix socket
-    #[clap(short = 'b', long, default_value = "127.0.0.1")]
+    #[clap(short = 'b', long, default_value = "0.0.0.0")]
     pub bind: String,
     /// Specify port to listen on
     #[clap(short = 'p', long, default_value_t = 8088)]
     pub port: u16,
-    /// Specify url to monitor
-    pub url: String,
+    /// Proxy target
+    #[clap(value_name = "URL")]
+    pub target: Option<String>,
 }
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
 
 struct Server {
-    base_url: String,
+    target: Option<String>,
     #[allow(unused)]
     running: Arc<AtomicBool>,
 }
@@ -84,30 +87,36 @@ impl Server {
     async fn call(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
 
-        let base_url = &self.base_url;
         let req_path = req.uri().to_string();
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
         let url = if !req_path.starts_with('/') {
             req_path.clone()
-        } else if req_path == "/" {
-            base_url.clone()
+        } else if let Some(base_url) = &self.target {
+            if req_path == "/" {
+                base_url.clone()
+            } else {
+                format!("{base_url}{req_path}")
+            }
         } else {
-            format!("{base_url}{req_path}")
+            println!("# {method} {req_path}");
+
+            internal_server_error(&mut res, anyhow!("No forward target"));
+            return Ok(res);
         };
+
+        println!("# {method} {url}");
 
         let req_body = req.collect().await?.to_bytes();
         let req_body_pretty = format_bytes(&req_body);
 
-        println!("# {method} {url}");
-
         println!(
             r#"
-REQUEST HEADERS
+## REQUEST HEADERS
 {req_headers:?}
 
-REQUEST BODY
+## REQUEST BODY
 {req_body_pretty}"#
         );
 
@@ -168,12 +177,12 @@ REQUEST BODY
 
         println!(
             r#"
-RESPONSE STATUS: {proxy_res_status}
+## RESPONSE STATUS: {proxy_res_status}
 
-RESPONSE HEADERS
+## RESPONSE HEADERS
 {proxy_res_headers:?}
 
-RESPONSE BODY
+## RESPONSE BODY
 {proxy_res_body_pretty}"#
         );
         Ok(res)
@@ -183,10 +192,10 @@ RESPONSE BODY
 fn serve(
     addr: IpAddr,
     port: u16,
-    base_url: String,
+    target: Option<String>,
     running: Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>> {
-    let server_handle = Arc::new(Server { base_url, running });
+    let server_handle = Arc::new(Server { target, running });
     let listener = create_listener(SocketAddr::new(addr, port))?;
     let handle = tokio::spawn(async move {
         loop {
