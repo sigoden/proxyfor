@@ -1,0 +1,19 @@
+[package]
+name = "modproxy"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+bytes = "1.5"
+clap = { version = "4.5.1", features = ["derive"] }
+hexplay = "0.3.0"
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
+tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
+hyper = { version = "1.0", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+hyper-tls = "0.6.0"
+socket2 = "0.5.6"
