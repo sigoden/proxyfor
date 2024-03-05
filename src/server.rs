@@ -53,33 +53,26 @@ impl Server {
                 format!("{base_url}{req_path}")
             }
         } else {
-            println!(
-                r#"
-#{method} {req_path}
-
-REQUEST HEADERS
-```
-{req_headers:?}
-```"#
-            );
-
+            println!("\n# {method} {req_path}");
             internal_server_error(&mut res, anyhow!("No forward target"));
             return Ok(res);
         };
 
+        let title = format!(" {method} {url}");
+
+        if method == Method::CONNECT {
+            return self.handle_connect(req, Some(title.clone()));
+        }
+
         println!(
             r#"
-# {method} {url}
+# {title}
 
 REQUEST HEADERS
 ```
 {req_headers:?}
 ```"#
         );
-
-        if method == Method::CONNECT {
-            return self.handle_connect(req);
-        }
 
         let req_body = req.collect().await?.to_bytes();
         if !req_body.is_empty() {
@@ -171,17 +164,31 @@ RESPONSE BODY
         Ok(res)
     }
 
-    fn handle_connect(self: Arc<Self>, mut req: Request) -> Result<Response, hyper::Error> {
+    fn handle_connect(
+        self: Arc<Self>,
+        mut req: Request,
+        mut title: Option<String>,
+    ) -> Result<Response, hyper::Error> {
         let fut = async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
+                    let mut print_error = |err: String| {
+                        if let Some(title) = title.take() {
+                            println!(
+                                r#"
+# {title}
+
+{err}"#
+                            );
+                        }
+                    };
                     let mut upgraded = TokioIo::new(upgraded);
 
                     let mut buffer = [0; 4];
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
                         Err(e) => {
-                            println!("Failed to read from upgraded connection: {e}");
+                            print_error(format!("Failed to read from upgraded connection: {e}"));
                             return;
                         }
                     };
@@ -193,7 +200,7 @@ RESPONSE BODY
 
                     if buffer == *b"GET " {
                         if let Err(e) = self.serve_connect_stream(upgraded, Scheme::HTTP).await {
-                            println!("Websocket connect error: {e}");
+                            print_error(format!("Websocket connect error: {e}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let authority = req
@@ -204,7 +211,7 @@ RESPONSE BODY
                         let server_config = match self.ca.gen_server_config(authority).await {
                             Ok(server_config) => server_config,
                             Err(e) => {
-                                println!("Failed to build server config: {e}");
+                                print_error(format!("Failed to build server config: {e}"));
                                 return;
                             }
                         };
@@ -212,21 +219,21 @@ RESPONSE BODY
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
                             Err(e) => {
-                                println!("Failed to establish TLS Connection: {e}");
+                                print_error(format!("Failed to establish TLS Connection: {e}"));
                                 return;
                             }
                         };
 
                         if let Err(e) = self.serve_connect_stream(stream, Scheme::HTTPS).await {
                             if !e.to_string().starts_with("error shutting down connection") {
-                                println!("HTTPS connect error: {e}");
+                                print_error(format!("HTTPS connect error: {e}"));
                             }
                         }
                     } else {
-                        println!(
+                        print_error(format!(
                             "Unknown protocol, read '{:02X?}' from upgraded connection",
                             &buffer[..bytes_read]
-                        );
+                        ));
 
                         let authority = req
                             .uri()
@@ -237,7 +244,7 @@ RESPONSE BODY
                         let mut server = match TcpStream::connect(authority).await {
                             Ok(server) => server,
                             Err(e) => {
-                                println! {"Failed to connect to {authority}: {e}"};
+                                print_error(format! {"Failed to connect to {authority}: {e}"});
                                 return;
                             }
                         };
@@ -245,11 +252,23 @@ RESPONSE BODY
                         if let Err(e) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
-                            println!("Failed to tunnel unknown protocol to {}: {}", authority, e);
+                            print_error(format!(
+                                "Failed to tunnel unknown protocol to {}: {}",
+                                authority, e
+                            ));
                         }
                     }
                 }
-                Err(e) => println!("Upgrade error {e}"),
+                Err(e) => {
+                    if let Some(title) = title.take() {
+                        println!(
+                            r#"
+# {title}
+
+Upgrade error: {e}"#
+                        );
+                    }
+                }
             };
         };
 
@@ -298,7 +317,10 @@ RESPONSE BODY
 }
 
 fn internal_server_error<T: Display>(res: &mut Response, err: T) {
-    println!("{err}");
+    println!(
+        r#"
+{err}"#
+    );
     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 }
 
