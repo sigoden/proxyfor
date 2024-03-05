@@ -23,10 +23,8 @@ use tokio::{net::TcpListener, task::JoinHandle};
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let ca = load_ca()?;
-    let addr: IpAddr = cli
-        .bind
-        .parse()
-        .map_err(|_| anyhow!("Invalid bind '{}'", cli.bind))?;
+    let (ip, port) =
+        parse_addr(&cli.listen).ok_or_else(|| anyhow!("Invalid addr '{}'", cli.listen))?;
     let running = Arc::new(AtomicBool::new(true));
     let target = cli.target.map(|url| {
         if !url.starts_with("http://") && !url.starts_with("https://") {
@@ -46,9 +44,9 @@ async fn main() -> Result<()> {
         mime_filters,
         running: running.clone(),
     });
-    let handle = run(server, addr, cli.port)?;
+    let handle = run(server, ip, port)?;
     let running = Arc::new(AtomicBool::new(true));
-    eprintln!("Listening on {}:{}", cli.bind, cli.port);
+    eprintln!("Listening on {}:{}", ip, port);
     tokio::select! {
         ret = handle => {
             if let Err(e) = ret {
@@ -66,25 +64,22 @@ async fn main() -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Specify address to listen on
-    #[clap(short = 'b', long, value_name = "ADDR", default_value = "0.0.0.0")]
-    pub bind: String,
-    /// Specify port to listen on
-    #[clap(short = 'p', long, default_value_t = 8080)]
-    pub port: u16,
-    /// Only inspect connections whose `{method} {uri}` matches the regex
+    /// Listening ip and port address
+    #[clap(short = 'l', long, value_name = "ADDR", default_value = "0.0.0.0:8080")]
+    pub listen: String,
+    /// Only inspect http(s) traffic whose `{method} {uri}` matches the regex
     #[clap(short = 'f', long, value_name = "REGEX")]
     pub filters: Vec<String>,
-    /// Only inspect connections whose content-type matches the value
+    /// Only inspect http(s) traffic whose content-type matches the value
     #[clap(short = 'm', long, value_name = "VALUE")]
     pub mime_filters: Vec<String>,
-    /// Forward target
+    /// Forward to the url
     #[clap(value_name = "URL")]
     pub target: Option<String>,
 }
 
-fn run(server: Arc<Server>, addr: IpAddr, port: u16) -> Result<JoinHandle<()>> {
-    let listener = create_listener(SocketAddr::new(addr, port))?;
+fn run(server: Arc<Server>, ip: IpAddr, port: u16) -> Result<JoinHandle<()>> {
+    let listener = create_listener(SocketAddr::new(ip, port))?;
     let handle = tokio::spawn(async move {
         loop {
             let accept = match listener.accept().await {
@@ -115,6 +110,22 @@ where
             Some(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {}
             _ => eprintln!("Serving connection {}", err),
         }
+    }
+}
+
+fn parse_addr(value: &str) -> Option<(IpAddr, u16)> {
+    if let Ok(port) = value.parse() {
+        Some(("0.0.0.0".parse().unwrap(), port))
+    } else if let Ok(ip) = value.parse() {
+        Some((ip, 8080))
+    } else if let Some((ip, port)) = value.rsplit_once(':') {
+        if let (Some(ip), Some(port)) = (ip.parse().ok(), port.parse().ok()) {
+            Some((ip, port))
+        } else {
+            None
+        }
+    } else {
+        None
     }
 }
 

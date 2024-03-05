@@ -3,7 +3,7 @@
 [![CI](https://github.com/sigoden/forproxy/actions/workflows/ci.yaml/badge.svg)](https://github.com/sigoden/forproxy/actions/workflows/ci.yaml)
 [![Crates](https://img.shields.io/crates/v/forproxy.svg)](https://crates.io/crates/forproxy)
 
-A CLI tool to proxy and analyze HTTP/HTTPS connections.
+A simple and portable proxy for capturing HTTP and HTTPS traffic.
 
 ## Installation
 
@@ -21,7 +21,7 @@ Download from [Github Releases](https://github.com/sigoden/forproxy/releases), u
 
 ### Proxy mode
 
-The client sets the proxy to `http://localhost:8080` for forproxy to analyze the connections.
+The client sets the proxy to `http://localhost:8080` for forproxy to capture the http(s) traffic.
 
 ```sh
 $ forproxy
@@ -49,35 +49,42 @@ $ curl http://localhost:8080/ip
 Usage: forproxy [OPTIONS] [URL]
 
 Arguments:
-  [URL]  Forward target
+  [URL]  Forward to the url
 
 Options:
-  -b, --bind <ADDR>           Specify address to listen on [default: 0.0.0.0]
-  -p, --port <PORT>           Specify port to listen on [default: 8080]
-  -f, --filters <REGEX>       Only inspect connections whose `{method} {uri}` matches the regex
-  -m, --mime-filters <VALUE>  Only inspect connections whose content-type matches the value
+  -l, --listen <ADDR>         Listening ip and port address [default: 0.0.0.0:8080]
+  -f, --filters <REGEX>       Only inspect http(s) traffic whose `{method} {uri}` matches the regex
+  -m, --mime-filters <VALUE>  Only inspect http(s) traffic whose content-type matches the value
   -h, --help                  Print help
   -V, --version               Print version
 ```
 
-Change the bind address and port.
+Change the ip and port.
 
 ```sh
-forproxy -b 127.0.0.1 -p 18080
+forproxy -l 18080
+forproxy -l 127.0.0.1
+forproxy -l 127.0.0.1:18080
 ```
 
-Use `-f/--filters` to filter connections by title (`{method} {uri}`).
+Use `-f/--filters` to filter traffic by title (`{method} {uri}`).
 
 ```sh
 forproxy -f httpbin.org -f postman-echo.com
 forproxy -f '/^(get|post) https:\/\/httpbin.org/'       
 ```
 
-Use `-m/--mime-filters` to filter connections by content-type.
+Use `-m/--mime-filters` to filter traffic by content-type.
 
-```
+```sh
 forproxy -m application/json -m application/ld+json
 forproxy -m text/
+```
+
+Pipe it to a markdown file, then analyze the captured traffic using your favorite editor/IDE with folding, navigation, search capabilities.
+
+```sh
+forproxy > forproxy.md
 ```
 
 ## Certificates

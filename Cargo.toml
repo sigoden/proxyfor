@@ -3,12 +3,12 @@ name = "forproxy"
 version = "0.1.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
-description = "A CLI tool to proxy and analyze HTTP/HTTPS connections."
+description = "A simple and portable proxy for capturing HTTP and HTTPS traffic."
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/sigoden/forproxy"
 repository = "https://github.com/sigoden/forproxy"
 categories = ["command-line-utilities"]
-keywords = ["proxy", "mitm", "forward", "http"]
+keywords = ["proxy", "mitm", "https", "http"]
 
 [dependencies]
 anyhow = "1.0"
