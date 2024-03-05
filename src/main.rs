@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
     let ca = load_ca()?;
     let handle = serve(addr, cli.port, target, ca, running.clone())?;
     let running = Arc::new(AtomicBool::new(true));
-    println!("Listening on {}:{}", cli.bind, cli.port);
+    eprintln!("Listening on {}:{}", cli.bind, cli.port);
     tokio::select! {
         ret = handle => {
             if let Err(e) = ret {

@@ -24,7 +24,7 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
-const MAX_BYTES: usize = 1048576; // 1 Mb
+const HEX_VIEW_SIZE: usize = 320;
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
@@ -53,29 +53,45 @@ impl Server {
                 format!("{base_url}{req_path}")
             }
         } else {
-            println!("# {method} {req_path}");
+            println!(
+                r#"
+#{method} {req_path}
+
+REQUEST HEADERS
+```
+{req_headers:?}
+```"#
+            );
 
             internal_server_error(&mut res, anyhow!("No forward target"));
             return Ok(res);
         };
 
-        println!("# {method} {url}");
+        println!(
+            r#"
+# {method} {url}
+
+REQUEST HEADERS
+```
+{req_headers:?}
+```"#
+        );
 
         if method == Method::CONNECT {
             return self.handle_connect(req);
         }
 
         let req_body = req.collect().await?.to_bytes();
-        let req_body_pretty = format_bytes(&req_body);
-
-        println!(
-            r#"
-## REQUEST HEADERS
-{req_headers:?}
-
+        if !req_body.is_empty() {
+            let req_body_pretty = format_bytes(&req_body);
+            println!(
+                r#"
 ## REQUEST BODY
-{req_body_pretty}"#
-        );
+```
+{req_body_pretty}
+```"#
+            );
+        }
 
         let mut builder = hyper::Request::builder().uri(&url).method(method);
         for (key, value) in req_headers.iter() {
@@ -134,13 +150,17 @@ impl Server {
 
         println!(
             r#"
-## RESPONSE STATUS: {proxy_res_status}
+RESPONSE STATUS: {proxy_res_status}
 
-## RESPONSE HEADERS
+RESPONSE HEADERS
+```
 {proxy_res_headers:?}
+```
 
-## RESPONSE BODY
-{proxy_res_body_pretty}"#
+RESPONSE BODY
+```
+{proxy_res_body_pretty}
+```"#
         );
         Ok(res)
     }
@@ -155,7 +175,7 @@ impl Server {
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
                         Err(e) => {
-                            eprintln!("Failed to read from upgraded connection: {e}");
+                            println!("Failed to read from upgraded connection: {e}");
                             return;
                         }
                     };
@@ -167,7 +187,7 @@ impl Server {
 
                     if buffer == *b"GET " {
                         if let Err(e) = self.serve_connect_stream(upgraded, Scheme::HTTP).await {
-                            eprintln!("Websocket connect error: {e}");
+                            println!("Websocket connect error: {e}");
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let authority = req
@@ -178,7 +198,7 @@ impl Server {
                         let server_config = match self.ca.gen_server_config(authority).await {
                             Ok(server_config) => server_config,
                             Err(e) => {
-                                eprintln!("Failed to build server config: {e}");
+                                println!("Failed to build server config: {e}");
                                 return;
                             }
                         };
@@ -186,18 +206,18 @@ impl Server {
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
                             Err(e) => {
-                                eprintln!("Failed to establish TLS Connection: {e}");
+                                println!("Failed to establish TLS Connection: {e}");
                                 return;
                             }
                         };
 
                         if let Err(e) = self.serve_connect_stream(stream, Scheme::HTTPS).await {
                             if !e.to_string().starts_with("error shutting down connection") {
-                                eprintln!("HTTPS connect error: {e}");
+                                println!("HTTPS connect error: {e}");
                             }
                         }
                     } else {
-                        eprintln!(
+                        println!(
                             "Unknown protocol, read '{:02X?}' from upgraded connection",
                             &buffer[..bytes_read]
                         );
@@ -211,7 +231,7 @@ impl Server {
                         let mut server = match TcpStream::connect(authority).await {
                             Ok(server) => server,
                             Err(e) => {
-                                eprintln! {"failed to connect to {authority}: {e}"};
+                                println! {"Failed to connect to {authority}: {e}"};
                                 return;
                             }
                         };
@@ -219,11 +239,11 @@ impl Server {
                         if let Err(e) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
-                            eprintln!("Failed to tunnel unknown protocol to {}: {}", authority, e);
+                            println!("Failed to tunnel unknown protocol to {}: {}", authority, e);
                         }
                     }
                 }
-                Err(e) => eprintln!("Upgrade error {e}"),
+                Err(e) => println!("Upgrade error {e}"),
             };
         };
 
@@ -272,7 +292,7 @@ impl Server {
 }
 
 fn internal_server_error<T: Display>(res: &mut Response, err: T) {
-    println!("ERROR: {err}");
+    println!("{err}");
     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 }
 
@@ -301,9 +321,14 @@ decompress_fn!(decompress_gzip, GzipDecoder);
 decompress_fn!(decompress_br, BrotliDecoder);
 
 fn format_bytes(data: &[u8]) -> String {
-    let data = &data[0..MAX_BYTES.min(data.len())];
     if let Ok(value) = std::str::from_utf8(data) {
         value.to_string()
+    } else if data.len() > HEX_VIEW_SIZE * 2 {
+        format!(
+            "{}\n......\n{}",
+            hexplay::HexView::new(&data[0..HEX_VIEW_SIZE]),
+            hexplay::HexView::new(&data[data.len() - HEX_VIEW_SIZE..])
+        )
     } else {
         hexplay::HexView::new(data).to_string()
     }
