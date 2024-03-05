@@ -16,6 +16,7 @@ async-compression = { version = "0.4.6", features = ["brotli", "gzip", "deflate"
 bytes = "1.5"
 clap = { version = "4.5.1", features = ["derive"] }
 dirs = "5.0.1"
+fancy-regex = "0.13.0"
 hexplay = "0.3.0"
 http = "1.1.0"
 http-body-util = "0.1"

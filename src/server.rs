@@ -1,9 +1,16 @@
-use crate::{certificate_authority::CertificateAuthority, rewind::Rewind};
+use crate::{
+    certificate_authority::CertificateAuthority,
+    filter::{is_match_title, is_match_type, Filter},
+    rewind::Rewind,
+};
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
 use bytes::Bytes;
-use http::uri::{Authority, Scheme};
+use http::{
+    header::CONTENT_TYPE,
+    uri::{Authority, Scheme},
+};
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
     body::Incoming,
@@ -32,6 +39,8 @@ type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
 pub(crate) struct Server {
     pub(crate) target: Option<String>,
     pub(crate) ca: CertificateAuthority,
+    pub(crate) filters: Vec<Filter>,
+    pub(crate) type_filters: Vec<String>,
     #[allow(unused)]
     pub(crate) running: Arc<AtomicBool>,
 }
@@ -53,40 +62,46 @@ impl Server {
                 format!("{base_url}{req_path}")
             }
         } else {
-            println!("\n# {method} {req_path}");
-            internal_server_error(&mut res, anyhow!("No forward target"));
+            println!(
+                r#"
+# {method} {req_path}
+
+No forward target"#
+            );
+            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             return Ok(res);
         };
 
-        let title = format!(" {method} {url}");
+        let title = format!("{method} {url}");
 
         if method == Method::CONNECT {
             return self.handle_connect(req, Some(title.clone()));
         }
 
-        println!(
-            r#"
-# {title}
+        let mut is_inspect = is_match_title(&self.filters, &title);
+        let mut inspect_contents = vec![];
 
-REQUEST HEADERS
+        inspect_contents.push(format!("\n# {title}"));
+
+        inspect_contents.push(format!(
+            r#"REQUEST HEADERS
 ```
 {req_headers:?}
 ```"#
-        );
+        ));
 
         let req_body = req.collect().await?.to_bytes();
         if !req_body.is_empty() {
             let req_body_pretty = format_bytes(&req_body);
-            println!(
-                r#"
-## REQUEST BODY
+            inspect_contents.push(format!(
+                r#"REQUEST BODY
 ```
 {req_body_pretty}
 ```"#
-            );
+            ));
         }
 
-        let mut builder = hyper::Request::builder().uri(&url).method(method);
+        let mut builder = hyper::Request::builder().uri(&url).method(method.clone());
         for (key, value) in req_headers.iter() {
             if key == HOST {
                 continue;
@@ -97,7 +112,7 @@ REQUEST HEADERS
         let proxy_req = match builder.body(Full::new(req_body)) {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err);
+                internal_server_error(&mut res, err, is_inspect, &mut inspect_contents);
                 return Ok(res);
             }
         };
@@ -120,13 +135,22 @@ REQUEST HEADERS
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err);
+                internal_server_error(&mut res, err, is_inspect, &mut inspect_contents);
                 return Ok(res);
             }
         };
 
         let proxy_res_status = proxy_res.status();
         let proxy_res_headers = proxy_res.headers().clone();
+
+        if is_inspect {
+            if let Some(header_value) = proxy_res_headers
+                .get(CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+            {
+                is_inspect = is_match_type(&self.type_filters, header_value)
+            }
+        };
 
         *res.status_mut() = proxy_res_status;
         let mut encoding = "";
@@ -140,16 +164,14 @@ REQUEST HEADERS
         }
 
         let proxy_res_body = proxy_res.collect().await?.to_bytes();
-        let decompress_body = decompress(&proxy_res_body, encoding)
-            .await
-            .unwrap_or_else(|| proxy_res_body.to_vec());
-        let proxy_res_body_pretty = format_bytes(&decompress_body);
 
-        *res.body_mut() = Full::new(proxy_res_body).boxed();
-
-        println!(
-            r#"
-RESPONSE STATUS: {proxy_res_status}
+        if is_inspect {
+            let decompress_body = decompress(&proxy_res_body, encoding)
+                .await
+                .unwrap_or_else(|| proxy_res_body.to_vec());
+            let proxy_res_body_pretty = format_bytes(&decompress_body);
+            inspect_contents.push(format!(
+                r#"RESPONSE STATUS: {proxy_res_status}
 
 RESPONSE HEADERS
 ```
@@ -160,7 +182,12 @@ RESPONSE BODY
 ```
 {proxy_res_body_pretty}
 ```"#
-        );
+            ));
+            println!("{}", inspect_contents.join("\n\n"))
+        }
+
+        *res.body_mut() = Full::new(proxy_res_body).boxed();
+
         Ok(res)
     }
 
@@ -316,11 +343,16 @@ Upgrade error: {e}"#
     }
 }
 
-fn internal_server_error<T: Display>(res: &mut Response, err: T) {
-    println!(
-        r#"
-{err}"#
-    );
+fn internal_server_error<T: Display>(
+    res: &mut Response,
+    err: T,
+    is_inspect: bool,
+    inspect_contents: &mut Vec<String>,
+) {
+    if is_inspect {
+        inspect_contents.push(err.to_string());
+        println!("{}", inspect_contents.join("\n\n"))
+    }
     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 }
 
