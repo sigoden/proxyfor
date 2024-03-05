@@ -59,7 +59,7 @@ Options:
   -V, --version               Print version
 ```
 
-Change the bind ip and port.
+Change the ip and port.
 
 ```sh
 forproxy -l 18080
@@ -76,13 +76,14 @@ forproxy -f '/^(get|post) https:\/\/httpbin.org/'
 
 Use `-m/--mime-filters` to filter traffic by content-type.
 
-```
+```sh
 forproxy -m application/json -m application/ld+json
 forproxy -m text/
 ```
 
 Pipe it to a markdown file, then analyze the captured traffic using your favorite editor/IDE with folding, navigation, search capabilities.
-```
+
+```sh
 forproxy > forproxy.md
 ```
 
