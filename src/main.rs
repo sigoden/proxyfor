@@ -1,11 +1,11 @@
 mod certificate_authority;
+mod filter;
 mod rewind;
 mod server;
 
-use crate::{certificate_authority::load_ca, server::Server};
+use crate::{certificate_authority::load_ca, filter::parse_filters, server::Server};
 
 use anyhow::{anyhow, Result};
-use certificate_authority::CertificateAuthority;
 use clap::Parser;
 use hyper::{body::Incoming, service::service_fn};
 use hyper_util::{
@@ -34,8 +34,17 @@ async fn main() -> Result<()> {
             url
         }
     });
+    let filters = parse_filters(&cli.filters)?;
+    let type_filters = cli.type_filters.iter().map(|v| v.to_lowercase()).collect();
     let ca = load_ca()?;
-    let handle = serve(addr, cli.port, target, ca, running.clone())?;
+    let server = Arc::new(Server {
+        target,
+        ca,
+        filters,
+        type_filters,
+        running: running.clone(),
+    });
+    let handle = run(server, addr, cli.port)?;
     let running = Arc::new(AtomicBool::new(true));
     eprintln!("Listening on {}:{}", cli.bind, cli.port);
     tokio::select! {
@@ -55,29 +64,24 @@ async fn main() -> Result<()> {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    /// Specify bind address or unix socket
-    #[clap(short = 'b', long, default_value = "0.0.0.0")]
+    /// Specify address to listen on
+    #[clap(short = 'b', long, value_name = "ADDR", default_value = "0.0.0.0")]
     pub bind: String,
     /// Specify port to listen on
     #[clap(short = 'p', long, default_value_t = 8088)]
     pub port: u16,
+    /// Only inspect connections whose title(`{method} {uri}`) matches the regexe
+    #[clap(short = 'f', long, value_name = "REGEX")]
+    pub filters: Vec<String>,
+    /// Only inspect connections whose content-type matches the value
+    #[clap(short = 't', long, value_name = "VALUE")]
+    pub type_filters: Vec<String>,
     /// Proxy target
     #[clap(value_name = "URL")]
     pub target: Option<String>,
 }
 
-fn serve(
-    addr: IpAddr,
-    port: u16,
-    target: Option<String>,
-    ca: CertificateAuthority,
-    running: Arc<AtomicBool>,
-) -> Result<JoinHandle<()>> {
-    let server_handle = Arc::new(Server {
-        target,
-        ca,
-        running,
-    });
+fn run(server: Arc<Server>, addr: IpAddr, port: u16) -> Result<JoinHandle<()>> {
     let listener = create_listener(SocketAddr::new(addr, port))?;
     let handle = tokio::spawn(async move {
         loop {
@@ -87,7 +91,7 @@ fn serve(
             };
             let (cnx, _) = accept;
             let stream = TokioIo::new(cnx);
-            tokio::spawn(handle_stream(server_handle.clone(), stream));
+            tokio::spawn(handle_stream(server.clone(), stream));
         }
     });
     Ok(handle)

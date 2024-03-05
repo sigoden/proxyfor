@@ -48,6 +48,37 @@ Forproxy can decrypt encrypted traffic on the fly, as long as the client trusts 
 
 The forproxy CA cert is located in `~/.forproxy` after it has been generated at the first start of forproxy.
 
+## CLI
+
+```
+Usage: forproxy [OPTIONS] [URL]
+
+Arguments:
+  [URL]  Proxy target
+
+Options:
+  -b, --bind <ADDR>           Specify address to listen on [default: 0.0.0.0]
+  -p, --port <PORT>           Specify port to listen on [default: 8088]
+  -f, --filters <REGEX>       Only inspect connections whose title(`{method} {uri}`) matches the regexe
+  -t, --type-filters <VALUE>  Only inspect connections whose content-type matches the value
+  -h, --help                  Print help
+  -V, --version               Print version
+```
+
+### Filter
+
+Use `-f/--filters` to filter connections by title (`{method} {uri}`).
+
+```
+tproxy -f httpbin.org -f postman-echo.com
+tproxy -f '/^(get|post) https:\/\/httpbin.org/'
+```
+
+Use `-t/--type-filters` to filter connections by content-type
+```
+tproxy -t application/json
+```
+
 ## License
 
 Copyright (c) 2024-∞ forproxy-developers.
