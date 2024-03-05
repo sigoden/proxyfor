@@ -10,7 +10,7 @@ A CLI tool to proxy and analyze HTTP/HTTPS connections.
 ### With cargo
 
 ```
-cargo install projclean
+cargo install forproxy
 ```
 
 ### Binaries on macOS, Linux, Windows
@@ -21,26 +21,27 @@ Download from [Github Releases](https://github.com/sigoden/forproxy/releases), u
 
 ### Proxy mode
 
-![proxy-mode](https://github.com/sigoden/forproxy/assets/4012553/3649172b-5f8c-40ee-8600-d965eeecc924)
+The client sets the proxy to `http://localhost:8088` for forproxy to analyze the connections.
 
-
-The client forwarded the request to forproxy by setting the proxy `http://localhost:8088`.
-
-```
+```sh
+$ forproxy
 $ curl -x http://localhost:8088 httpbin.org/ip
 ```
 
+![proxy-mode](https://github.com/sigoden/forproxy/assets/4012553/3649172b-5f8c-40ee-8600-d965eeecc924)
+
 ### Forward mode
 
-![forward-mode](https://github.com/sigoden/forproxy/assets/4012553/74e54b98-92fb-45bb-8d87-3f18e3596a00)
+**This mode is suitable for scenarios where a proxy cannot be set.**
 
 The client directly requests `http://localhost:8088`, and forproxy forwards the request to `https://httpbin.org`.
 
-This mode is suitable for scenarios where a proxy cannot be set.
-
-```
+```sh
+$ forproxy httpbin.org/ip
 $ curl http://localhost:8088/ip
 ```
+
+![forward-mode](https://github.com/sigoden/forproxy/assets/4012553/74e54b98-92fb-45bb-8d87-3f18e3596a00)
 
 ## Certificates
 
@@ -61,6 +62,43 @@ Use `-m/--mime-filters` to filter connections by content-type (aka MIME type)
 
 ```
 forproxy -m application/json -m application/xml
+```
+
+## CLI
+
+```
+Usage: forproxy [OPTIONS] [URL]
+
+Arguments:
+  [URL]  Forward target
+
+Options:
+  -b, --bind <ADDR>           Specify address to listen on [default: 0.0.0.0]
+  -p, --port <PORT>           Specify port to listen on [default: 8088]
+  -f, --filters <REGEX>       Only inspect connections whose `{method} {uri}` matches the regex
+  -m, --mime-filters <VALUE>  Only inspect connections whose content-type matches the value
+  -h, --help                  Print help
+  -V, --version               Print version
+```
+
+Listen on `0.0.0.0:8088`
+```
+forproxy
+```
+
+Listen on `127.0.0.1:8080`
+```
+forproxy -b 127.0.0.1 -p 8080
+```
+
+Inspect specify domains
+```
+forproxy -f example1.com -f example2.com
+```
+
+Filter connections by content mimetype
+```
+forproxy -m text/ -m application/json
 ```
 
 ## License
