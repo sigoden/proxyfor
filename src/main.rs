@@ -70,13 +70,13 @@ struct Cli {
     /// Specify port to listen on
     #[clap(short = 'p', long, default_value_t = 8088)]
     pub port: u16,
-    /// Only inspect connections whose title(`{method} {uri}`) matches the regexe
+    /// Only inspect connections whose title(`{method} {uri}`) matches the regex
     #[clap(short = 'f', long, value_name = "REGEX")]
     pub filters: Vec<String>,
     /// Only inspect connections whose content-type matches the value
     #[clap(short = 't', long, value_name = "VALUE")]
     pub type_filters: Vec<String>,
-    /// Proxy target
+    /// Forward target
     #[clap(value_name = "URL")]
     pub target: Option<String>,
 }
