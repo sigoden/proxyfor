@@ -172,23 +172,27 @@ No forward target"#
         let proxy_res_body = proxy_res.collect().await?.to_bytes();
 
         if is_inspect {
-            let decompress_body = decompress(&proxy_res_body, encoding)
-                .await
-                .unwrap_or_else(|| proxy_res_body.to_vec());
-            let proxy_res_body_pretty = format_bytes(&decompress_body);
             inspect_contents.push(format!(
                 r#"RESPONSE STATUS: {proxy_res_status}
 
 RESPONSE HEADERS
 ```
 {proxy_res_headers:?}
-```
+```"#
+            ));
 
-RESPONSE BODY
+            if !proxy_res_body.is_empty() {
+                let decompress_body = decompress(&proxy_res_body, encoding)
+                    .await
+                    .unwrap_or_else(|| proxy_res_body.to_vec());
+                let proxy_res_body_pretty = format_bytes(&decompress_body);
+                inspect_contents.push(format!(
+                    r#"RESPONSE BODY
 ```
 {proxy_res_body_pretty}
 ```"#
-            ));
+                ));
+            }
             println!("{}", inspect_contents.join("\n\n"))
         }
 
