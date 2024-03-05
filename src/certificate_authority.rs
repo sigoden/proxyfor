@@ -27,7 +27,9 @@ pub fn load_ca() -> Result<CertificateAuthority> {
     let (ca_data, key_data) = if !ca_file.exists() {
         let err = || "Failed to generate CA certificate";
         let mut params = CertificateParams::new(["localhost".to_string()]);
-        params.distinguished_name.push(DnType::CommonName, "forproxy");
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "forproxy");
         let cert = Certificate::from_params(params).with_context(err)?;
         let ca_data = cert.serialize_pem().with_context(err)?;
         let key_data = cert.serialize_private_key_pem();
@@ -119,7 +121,9 @@ impl CertificateAuthority {
         let not_before = OffsetDateTime::now_utc() - Duration::seconds(NOT_BEFORE_OFFSET);
         params.not_before = not_before;
         params.not_after = not_before + Duration::seconds(TTL_SECS);
-        params.distinguished_name.push(DnType::CommonName, authority.host());
+        params
+            .distinguished_name
+            .push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
             .push(SanType::DnsName(authority.host().to_owned()));
