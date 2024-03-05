@@ -1,9 +1,10 @@
 mod certificate_authority;
+mod cli;
 mod filter;
 mod rewind;
 mod server;
 
-use crate::{certificate_authority::load_ca, filter::parse_filters, server::Server};
+use crate::{certificate_authority::load_ca, cli::Cli, filter::parse_filters, server::Server};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -26,7 +27,7 @@ async fn main() -> Result<()> {
     let (ip, port) =
         parse_addr(&cli.listen).ok_or_else(|| anyhow!("Invalid addr '{}'", cli.listen))?;
     let running = Arc::new(AtomicBool::new(true));
-    let target = cli.target.map(|url| {
+    let forward_url = cli.forward_url.map(|url| {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             format!("http://{}", url)
         } else {
@@ -37,7 +38,7 @@ async fn main() -> Result<()> {
     let mime_filters: Vec<String> = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
     let no_filter = filters.is_empty() && mime_filters.is_empty();
     let server = Arc::new(Server {
-        target,
+        forward_url,
         ca,
         no_filter,
         filters,
@@ -59,23 +60,6 @@ async fn main() -> Result<()> {
             Ok(())
         },
     }
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    /// Listening ip and port address
-    #[clap(short = 'l', long, value_name = "ADDR", default_value = "0.0.0.0:8080")]
-    pub listen: String,
-    /// Only inspect http(s) traffic whose `{method} {uri}` matches the regex
-    #[clap(short = 'f', long, value_name = "REGEX")]
-    pub filters: Vec<String>,
-    /// Only inspect http(s) traffic whose content-type matches the value
-    #[clap(short = 'm', long, value_name = "VALUE")]
-    pub mime_filters: Vec<String>,
-    /// Forward to the url
-    #[clap(value_name = "URL")]
-    pub target: Option<String>,
 }
 
 fn run(server: Arc<Server>, ip: IpAddr, port: u16) -> Result<JoinHandle<()>> {

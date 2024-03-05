@@ -37,7 +37,7 @@ type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
 
 pub(crate) struct Server {
-    pub(crate) target: Option<String>,
+    pub(crate) forward_url: Option<String>,
     pub(crate) ca: CertificateAuthority,
     pub(crate) filters: Vec<Filter>,
     pub(crate) mime_filters: Vec<String>,
@@ -56,7 +56,7 @@ impl Server {
 
         let url = if !req_path.starts_with('/') {
             req_path.clone()
-        } else if let Some(base_url) = &self.target {
+        } else if let Some(base_url) = &self.forward_url {
             if req_path == "/" {
                 base_url.clone()
             } else {
