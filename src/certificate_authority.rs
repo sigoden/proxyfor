@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use http::uri::Authority;
 use moka::future::Cache;
 use rand::{thread_rng, Rng};
-use rcgen::{DistinguishedName, DnType, KeyPair, SanType};
+use rcgen::{Certificate, CertificateParams, DnType, KeyPair, SanType};
 use std::{fs, io::Cursor, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
@@ -26,8 +26,9 @@ pub fn load_ca() -> Result<CertificateAuthority> {
     let key_file = config_dir.join("forproxy-key.pem");
     let (ca_data, key_data) = if !ca_file.exists() {
         let err = || "Failed to generate CA certificate";
-        let cert =
-            rcgen::generate_simple_self_signed(["localhost".to_string()]).with_context(err)?;
+        let mut params = CertificateParams::new(["localhost".to_string()]);
+        params.distinguished_name.push(DnType::CommonName, "forproxy");
+        let cert = Certificate::from_params(params).with_context(err)?;
         let ca_data = cert.serialize_pem().with_context(err)?;
         let key_data = cert.serialize_private_key_pem();
         fs::write(&ca_file, &ca_data).with_context(err)?;
@@ -118,11 +119,7 @@ impl CertificateAuthority {
         let not_before = OffsetDateTime::now_utc() - Duration::seconds(NOT_BEFORE_OFFSET);
         params.not_before = not_before;
         params.not_after = not_before + Duration::seconds(TTL_SECS);
-
-        let mut distinguished_name = DistinguishedName::new();
-        distinguished_name.push(DnType::CommonName, authority.host());
-        params.distinguished_name = distinguished_name;
-
+        params.distinguished_name.push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
             .push(SanType::DnsName(authority.host().to_owned()));
