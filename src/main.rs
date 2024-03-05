@@ -22,6 +22,7 @@ use tokio::{net::TcpListener, task::JoinHandle};
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    let ca = load_ca()?;
     let addr: IpAddr = cli
         .bind
         .parse()
@@ -35,11 +36,12 @@ async fn main() -> Result<()> {
         }
     });
     let filters = parse_filters(&cli.filters)?;
-    let mime_filters = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
-    let ca = load_ca()?;
+    let mime_filters: Vec<String> = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
+    let no_filter = filters.is_empty() && mime_filters.is_empty();
     let server = Arc::new(Server {
         target,
         ca,
+        no_filter,
         filters,
         mime_filters,
         running: running.clone(),

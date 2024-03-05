@@ -41,6 +41,7 @@ pub(crate) struct Server {
     pub(crate) ca: CertificateAuthority,
     pub(crate) filters: Vec<Filter>,
     pub(crate) mime_filters: Vec<String>,
+    pub(crate) no_filter: bool,
     #[allow(unused)]
     pub(crate) running: Arc<AtomicBool>,
 }
@@ -73,12 +74,17 @@ No forward target"#
         };
 
         let title = format!("{method} {url}");
+        let mut is_inspect = is_match_title(&self.filters, &title);
 
         if method == Method::CONNECT {
-            return self.handle_connect(req, Some(title.clone()));
+            let title = if is_inspect && !self.no_filter {
+                Some(title.clone())
+            } else {
+                None
+            };
+            return self.handle_connect(req, title);
         }
 
-        let mut is_inspect = is_match_title(&self.filters, &title);
         let mut inspect_contents = vec![];
 
         inspect_contents.push(format!("\n# {title}"));
