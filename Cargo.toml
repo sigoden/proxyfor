@@ -3,12 +3,12 @@ name = "forproxy"
 version = "0.1.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
-description = "A cli tool to proxy and analyze HTTP/HTTPS"
+description = "A proxy CLI to inspect HTTP/HTTPS connections."
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/sigoden/forproxy"
 repository = "https://github.com/sigoden/forproxy"
 categories = ["command-line-utilities"]
-keywords = ["proxy", "mitm"]
+keywords = ["proxy", "mitm", "forward", "http"]
 
 [dependencies]
 anyhow = "1.0"
@@ -18,8 +18,8 @@ clap = { version = "4.5.1", features = ["derive"] }
 dirs = "5.0.1"
 hexplay = "0.3.0"
 http-body-util = "0.1"
-hyper = { version = "1.0", features = ["full"] }
-hyper-util = { version = "0.1", features = ["server-auto", "client-legacy"] }
+hyper = { version = "1.0", features = ["client", "http1", "server"] }
+hyper-util = { version = "0.1", features = ["server", "http1", "client-legacy"] }
 hyper-tls = "0.6.0"
 http = "1.1.0"
 moka = { version = "0.12.5", features = ["future"] }
