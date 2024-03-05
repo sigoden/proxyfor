@@ -11,7 +11,7 @@ use hyper::{
     service::service_fn,
     Method, StatusCode, Uri,
 };
-use hyper_tls::HttpsConnector;
+use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
@@ -112,7 +112,13 @@ REQUEST HEADERS
         let builder = Client::builder(TokioExecutor::new());
         let proxy_res = if url.starts_with("https://") {
             builder
-                .build(HttpsConnector::new())
+                .build(
+                    HttpsConnectorBuilder::new()
+                        .with_webpki_roots()
+                        .https_only()
+                        .enable_http1()
+                        .build(),
+                )
                 .request(proxy_req)
                 .await
         } else {
