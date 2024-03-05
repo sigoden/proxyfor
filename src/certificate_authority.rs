@@ -15,15 +15,15 @@ use tokio_rustls::rustls::{
     ServerConfig,
 };
 
-const CA_CERT_FILENAME: &str = "forproxy-ca-cert.cer";
-const KEY_FILENAME: &str = "forproxy-key.pem";
+const CA_CERT_FILENAME: &str = "proxyfor-ca-cert.cer";
+const KEY_FILENAME: &str = "proxyfor-key.pem";
 const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
 const NOT_BEFORE_OFFSET: i64 = 60;
 
 pub fn load_ca() -> Result<CertificateAuthority> {
     let mut config_dir = dirs::home_dir().ok_or_else(|| anyhow!("No home dir"))?;
-    config_dir.push(".forproxy");
+    config_dir.push(".proxyfor");
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)
             .with_context(|| format!("Failed to create config dir '{}'", config_dir.display()))?;
@@ -161,10 +161,10 @@ fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params
         .distinguished_name
-        .push(DnType::CommonName, "forproxy");
+        .push(DnType::CommonName, "proxyfor");
     params
         .distinguished_name
-        .push(DnType::OrganizationName, "forproxy");
+        .push(DnType::OrganizationName, "proxyfor");
     params.not_before = yesterday;
     params.not_after = tomorrow;
     params

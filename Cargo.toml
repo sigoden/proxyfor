@@ -1,12 +1,12 @@
 [package]
-name = "forproxy"
+name = "proxyfor"
 version = "0.1.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
 description = "A simple and portable proxy for capturing HTTP and HTTPS traffic."
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/sigoden/forproxy"
-repository = "https://github.com/sigoden/forproxy"
+homepage = "https://github.com/sigoden/proxyfor"
+repository = "https://github.com/sigoden/proxyfor"
 categories = ["command-line-utilities"]
 keywords = ["proxy", "mitm", "https", "http"]
 
