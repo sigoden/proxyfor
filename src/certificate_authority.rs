@@ -1,8 +1,13 @@
 use anyhow::{anyhow, Context, Result};
 use http::uri::Authority;
 use moka::future::Cache;
-use rand::{thread_rng, Rng};
-use rcgen::{Certificate, CertificateParams, DnType, KeyPair, SanType};
+use rand::{rngs::OsRng, thread_rng, Rng};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
+    IsCa, KeyPair, KeyUsagePurpose, SanType,
+};
+use rsa::pkcs8::EncodePrivateKey;
+use rsa::RsaPrivateKey;
 use std::{fs, io::Cursor, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
@@ -10,7 +15,7 @@ use tokio_rustls::rustls::{
     ServerConfig,
 };
 
-const CA_CERT_FILENAME: &str = "forproxy-ca-cert.crt";
+const CA_CERT_FILENAME: &str = "forproxy-ca-cert.cer";
 const KEY_FILENAME: &str = "forproxy-key.pem";
 const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
@@ -26,34 +31,28 @@ pub fn load_ca() -> Result<CertificateAuthority> {
 
     let ca_file = config_dir.join(CA_CERT_FILENAME);
     let key_file = config_dir.join(KEY_FILENAME);
-    let (ca_data, key_data) = if !ca_file.exists() {
-        let err = || "Failed to generate CA certificate";
-        let mut params = CertificateParams::new(["localhost".to_string()]);
-        params
-            .distinguished_name
-            .push(DnType::CommonName, "forproxy");
-        let cert = Certificate::from_params(params).with_context(err)?;
-        let ca_data = cert.serialize_pem().with_context(err)?;
-        let key_data = cert.serialize_private_key_pem();
-        fs::write(&ca_file, &ca_data).with_context(err)?;
-        fs::write(&key_file, &key_data).with_context(err)?;
-        (ca_data, key_data)
+    let (key, ca_cert) = if !ca_file.exists() {
+        let key = gen_private_key().with_context(|| "Failed to generate private key")?;
+        let ca_cert = gen_ca_cert(&key).with_context(|| "Failed to generate CA certificate")?;
+        fs::write(&ca_file, ca_cert.pem())
+            .with_context(|| format!("Failed to save CA certificate to '{}'", ca_file.display()))?;
+        fs::write(&key_file, key.serialize_pem())
+            .with_context(|| format!("Failed to save private key to '{}'", key_file.display()))?;
+        (key, ca_cert)
     } else {
-        let ca_data =
-            fs::read_to_string(&ca_file).with_context(|| "Failed to read CA certificate")?;
-        let key_data =
-            fs::read_to_string(&key_file).with_context(|| "Failed to read private key")?;
-        (ca_data, key_data)
+        let key_err = || format!("Failed to read private key at '{}'", key_file.display());
+        let key_data = fs::read_to_string(&key_file).with_context(key_err)?;
+        let key = KeyPair::from_pem(&key_data).with_context(key_err)?;
+
+        let ca_err = || format!("Failed to read CA certificate at '{}'", ca_file.display());
+        let ca_data = fs::read_to_string(&ca_file).with_context(ca_err)?;
+        let ca_params = CertificateParams::from_ca_cert_pem(&ca_data).with_context(ca_err)?;
+        let ca_cert = Certificate::generate_self_signed(ca_params, &key).with_context(ca_err)?;
+        (key, ca_cert)
     };
 
-    let mut ca_reader = Cursor::new(ca_data.as_bytes());
-    let ca_cert = rustls_pemfile::certs(&mut ca_reader)
-        .next()
-        .and_then(|v| v.ok())
-        .ok_or_else(|| anyhow!("Invalid CA certificate"))?;
-
-    let mut key_reader = Cursor::new(key_data.as_bytes());
-    let private_key = rustls_pemfile::read_one(&mut key_reader)
+    let mut key_reader = Cursor::new(key.serialize_pem());
+    let key_der = rustls_pemfile::read_one(&mut key_reader)
         .ok()
         .flatten()
         .and_then(|key| match key {
@@ -64,24 +63,27 @@ pub fn load_ca() -> Result<CertificateAuthority> {
         })
         .ok_or_else(|| anyhow!("Invalid private key"))?;
 
-    let ca = CertificateAuthority::new(private_key, ca_cert, 1_000);
+    let ca = CertificateAuthority::new(key, key_der, ca_cert, 1_000);
     Ok(ca)
 }
 
 pub struct CertificateAuthority {
-    private_key: PrivateKeyDer<'static>,
-    ca_cert: CertificateDer<'static>,
+    private_key: KeyPair,
+    private_key_der: PrivateKeyDer<'static>,
+    ca_cert: Certificate,
     cache: Cache<Authority, Arc<ServerConfig>>,
 }
 
 impl CertificateAuthority {
     pub fn new(
-        private_key: PrivateKeyDer<'static>,
-        ca_cert: CertificateDer<'static>,
+        private_key: KeyPair,
+        private_key_der: PrivateKeyDer<'static>,
+        ca_cert: Certificate,
         cache_size: u64,
     ) -> Self {
         Self {
             private_key,
+            private_key_der,
             ca_cert,
             cache: Cache::builder()
                 .max_capacity(cache_size)
@@ -99,7 +101,7 @@ impl CertificateAuthority {
 
         let mut server_cfg = ServerConfig::builder()
             .with_no_client_auth()
-            .with_single_cert(certs, self.private_key.clone_key())?;
+            .with_single_cert(certs, self.private_key_der.clone_key())?;
 
         server_cfg.alpn_protocols = vec![
             #[cfg(feature = "http2")]
@@ -128,36 +130,56 @@ impl CertificateAuthority {
             .push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
-            .push(SanType::DnsName(authority.host().to_owned()));
+            .push(SanType::DnsName(Ia5String::try_from(authority.host())?));
 
-        let key_pair = KeyPair::from_der(self.private_key.secret_der())
-            .with_context(|| "Failed to parse private key")?;
-        params.alg = key_pair
-            .compatible_algs()
-            .next()
-            .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
-        params.key_pair = Some(key_pair);
+        let cert =
+            Certificate::generate(params, &self.private_key, &self.ca_cert, &self.private_key)?;
 
-        let key_pair = KeyPair::from_der(self.private_key.secret_der())
-            .with_context(|| "Failed to parse private key")?;
-
-        let ca_cert_params = rcgen::CertificateParams::from_ca_cert_der(&self.ca_cert, key_pair)
-            .with_context(|| "Failed to parse CA certificate")?;
-        let ca_cert = rcgen::Certificate::from_params(ca_cert_params)
-            .with_context(|| "Failed to generate CA certificate")?;
-
-        let cert = rcgen::Certificate::from_params(params)
-            .with_context(|| "Failed to generate certificate")?;
-        let cert_data = cert
-            .serialize_pem_with_signer(&ca_cert)
-            .with_context(|| "Failed to serialize certificate")?;
-
-        let mut cert_reader = Cursor::new(&cert_data);
+        let cert_data = cert.pem();
+        let mut cert_reader = Cursor::new(cert_data.as_bytes());
         let cert = rustls_pemfile::certs(&mut cert_reader)
             .next()
             .and_then(|v| v.ok())
-            .ok_or_else(|| anyhow!("Invalid certificate"))?;
+            .ok_or_else(|| anyhow!("Invalid generated certificate"))?;
 
         Ok(cert)
     }
+}
+
+fn gen_private_key() -> Result<KeyPair> {
+    let mut rng = OsRng;
+    let bits = 2048;
+    let private_key = RsaPrivateKey::new(&mut rng, bits)?;
+    let private_key_der = private_key.to_pkcs8_der()?;
+    let private_key = rcgen::KeyPair::try_from(private_key_der.as_bytes())?;
+    Ok(private_key)
+}
+
+fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
+    let mut params = CertificateParams::default();
+    let (yesterday, tomorrow) = validity_period();
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "forproxy");
+    params
+        .distinguished_name
+        .push(DnType::OrganizationName, "forproxy");
+    params.not_before = yesterday;
+    params.not_after = tomorrow;
+    params
+        .extended_key_usages
+        .push(ExtendedKeyUsagePurpose::ServerAuth);
+    params.key_usages.push(KeyUsagePurpose::KeyCertSign);
+    params.key_usages.push(KeyUsagePurpose::CrlSign);
+
+    let ca_cert = Certificate::generate_self_signed(params, key)?;
+    Ok(ca_cert)
+}
+
+fn validity_period() -> (OffsetDateTime, OffsetDateTime) {
+    let day = Duration::days(3650);
+    let yesterday = OffsetDateTime::now_utc().checked_sub(day).unwrap();
+    let tomorrow = OffsetDateTime::now_utc().checked_add(day).unwrap();
+    (yesterday, tomorrow)
 }
