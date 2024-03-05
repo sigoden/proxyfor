@@ -10,6 +10,8 @@ use tokio_rustls::rustls::{
     ServerConfig,
 };
 
+const CA_CERT_FILENAME: &str = "forproxy-ca-cert.crt";
+const KEY_FILENAME: &str = "forproxy-key.pem";
 const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
 const NOT_BEFORE_OFFSET: i64 = 60;
@@ -22,8 +24,8 @@ pub fn load_ca() -> Result<CertificateAuthority> {
             .with_context(|| format!("Failed to create config dir '{}'", config_dir.display()))?;
     }
 
-    let ca_file = config_dir.join("forproxy-ca-cert.pem");
-    let key_file = config_dir.join("forproxy-key.pem");
+    let ca_file = config_dir.join(CA_CERT_FILENAME);
+    let key_file = config_dir.join(KEY_FILENAME);
     let (ca_data, key_data) = if !ca_file.exists() {
         let err = || "Failed to generate CA certificate";
         let mut params = CertificateParams::new(["localhost".to_string()]);

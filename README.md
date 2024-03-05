@@ -43,28 +43,7 @@ $ curl http://localhost:8088/ip
 
 ![forward-mode](https://github.com/sigoden/forproxy/assets/4012553/74e54b98-92fb-45bb-8d87-3f18e3596a00)
 
-## Certificates
-
-Forproxy can decrypt encrypted traffic on the fly, as long as the client trusts forproxy’s built-in certificate authority. Usually this means that the forproxy CA certificate has to be installed on the client device.
-
-The forproxy CA cert is located in `~/.forproxy` after it has been generated at the first start of forproxy.
-
-## Filter
-
-Use `-f/--filters` to filter connections by title (`{method} {uri}`).
-
-```
-forproxy -f httpbin.org -f postman-echo.com
-forproxy -f '/^(get|post) https:\/\/httpbin.org/'
-```
-
-Use `-m/--mime-filters` to filter connections by content-type (aka MIME type)
-
-```
-forproxy -m application/json -m application/xml
-```
-
-## CLI
+# CLI
 
 ```
 Usage: forproxy [OPTIONS] [URL]
@@ -81,25 +60,31 @@ Options:
   -V, --version               Print version
 ```
 
-Listen on `0.0.0.0:8088`
-```
-forproxy
-```
+Change the bind address and port.
 
-Listen on `127.0.0.1:8080`
-```
+```sh
 forproxy -b 127.0.0.1 -p 8080
 ```
 
-Inspect specify domains
-```
-forproxy -f example1.com -f example2.com
+Use `-f/--filters` to filter connections by title (`{method} {uri}`).
+
+```sh
+forproxy -f httpbin.org -f postman-echo.com
+forproxy -f '/^(get|post) https:\/\/httpbin.org/'       
 ```
 
-Filter connections by content mimetype
+Use `-m/--mime-filters` to filter connections by content-type.
+
 ```
-forproxy -m text/ -m application/json
+forproxy -m application/json -m application/ld+json
+forproxy -m text/
 ```
+
+## Certificates
+
+Forproxy can decrypt encrypted traffic on the fly, as long as the client trusts forproxy’s built-in certificate authority. Usually this means that the forproxy CA certificate has to be installed on the client device.
+
+The forproxy CA cert is located in `~/.forproxy` after it has been generated at the first start of forproxy.
 
 ## License
 
