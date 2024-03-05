@@ -10,7 +10,7 @@ A CLI tool to proxy and analyze HTTP/HTTPS connections.
 ### With cargo
 
 ```
-cargo install https://github.com/sigoden/forproxy.git
+cargo install git://github.com/sigoden/forproxy
 ```
 
 ### Binaries on macOS, Linux, Windows

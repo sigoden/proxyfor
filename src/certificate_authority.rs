@@ -3,7 +3,8 @@ use http::uri::Authority;
 use moka::future::Cache;
 use rand::{rngs::OsRng, thread_rng, Rng};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DnType, Ia5String, IsCa, KeyPair, SanType,
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
+    IsCa, KeyPair, KeyUsagePurpose, SanType,
 };
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::RsaPrivateKey;
@@ -155,7 +156,7 @@ fn gen_private_key() -> Result<KeyPair> {
 }
 
 fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
-    let mut params = CertificateParams::new(["localhost".to_string()])?;
+    let mut params = CertificateParams::default();
     let (yesterday, tomorrow) = validity_period();
     params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     params
@@ -166,6 +167,11 @@ fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
         .push(DnType::OrganizationName, "forproxy");
     params.not_before = yesterday;
     params.not_after = tomorrow;
+    params
+        .extended_key_usages
+        .push(ExtendedKeyUsagePurpose::ServerAuth);
+    params.key_usages.push(KeyUsagePurpose::KeyCertSign);
+    params.key_usages.push(KeyUsagePurpose::CrlSign);
 
     let ca_cert = Certificate::generate_self_signed(params, key)?;
     Ok(ca_cert)
