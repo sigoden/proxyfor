@@ -1,28 +1,36 @@
 [package]
-name = "midproxy"
+name = "forproxy"
 version = "0.1.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
 description = "A cli tool to proxy and analyze HTTP/HTTPS"
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/sigoden/midproxy"
-repository = "https://github.com/sigoden/midproxy"
+homepage = "https://github.com/sigoden/forproxy"
+repository = "https://github.com/sigoden/forproxy"
 categories = ["command-line-utilities"]
 keywords = ["proxy", "mitm"]
 
 [dependencies]
 anyhow = "1.0"
+async-compression = { version = "0.4.6", features = ["brotli", "gzip", "deflate", "tokio"] }
 bytes = "1.5"
 clap = { version = "4.5.1", features = ["derive"] }
+dirs = "5.0.1"
 hexplay = "0.3.0"
 http-body-util = "0.1"
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
-tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
 hyper = { version = "1.0", features = ["full"] }
 hyper-util = { version = "0.1", features = ["server-auto", "client-legacy"] }
 hyper-tls = "0.6.0"
+http = "1.1.0"
+moka = { version = "0.12.5", features = ["future"] }
+rand = "0.8.5"
+rcgen = { version = "0.12.0", features = ["x509-parser"] }
+rustls-pemfile = "2.0.0"
 socket2 = "0.5.6"
-async-compression = { version = "0.4.6", features = ["brotli", "gzip", "deflate", "tokio"] }
+time = "0.3.34"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
+tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
+tokio-rustls = "0.25.0"
 
 [profile.release]
 lto = true
