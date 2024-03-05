@@ -35,13 +35,13 @@ async fn main() -> Result<()> {
         }
     });
     let filters = parse_filters(&cli.filters)?;
-    let type_filters = cli.type_filters.iter().map(|v| v.to_lowercase()).collect();
+    let mime_filters = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
     let ca = load_ca()?;
     let server = Arc::new(Server {
         target,
         ca,
         filters,
-        type_filters,
+        mime_filters,
         running: running.clone(),
     });
     let handle = run(server, addr, cli.port)?;
@@ -70,12 +70,12 @@ struct Cli {
     /// Specify port to listen on
     #[clap(short = 'p', long, default_value_t = 8088)]
     pub port: u16,
-    /// Only inspect connections whose title(`{method} {uri}`) matches the regex
+    /// Only inspect connections whose `{method} {uri}` matches the regex
     #[clap(short = 'f', long, value_name = "REGEX")]
     pub filters: Vec<String>,
     /// Only inspect connections whose content-type matches the value
-    #[clap(short = 't', long, value_name = "VALUE")]
-    pub type_filters: Vec<String>,
+    #[clap(short = 'm', long, value_name = "VALUE")]
+    pub mime_filters: Vec<String>,
     /// Forward target
     #[clap(value_name = "URL")]
     pub target: Option<String>,

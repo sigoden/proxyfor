@@ -40,7 +40,7 @@ pub(crate) struct Server {
     pub(crate) target: Option<String>,
     pub(crate) ca: CertificateAuthority,
     pub(crate) filters: Vec<Filter>,
-    pub(crate) type_filters: Vec<String>,
+    pub(crate) mime_filters: Vec<String>,
     #[allow(unused)]
     pub(crate) running: Arc<AtomicBool>,
 }
@@ -148,7 +148,7 @@ No forward target"#
                 .get(CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
             {
-                is_inspect = is_match_type(&self.type_filters, header_value)
+                is_inspect = is_match_type(&self.mime_filters, header_value)
             }
         };
 

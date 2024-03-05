@@ -57,9 +57,10 @@ forproxy -f httpbin.org -f postman-echo.com
 forproxy -f '/^(get|post) https:\/\/httpbin.org/'
 ```
 
-Use `-t/--type-filters` to filter connections by content-type
+Use `-m/--mime-filters` to filter connections by content-type (aka MIME type)
+
 ```
-forproxy -t application/json
+forproxy -m application/json -m application/xml
 ```
 
 ## License
