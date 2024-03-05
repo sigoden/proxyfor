@@ -21,11 +21,11 @@ Download from [Github Releases](https://github.com/sigoden/forproxy/releases), u
 
 ### Proxy mode
 
-The client sets the proxy to `http://localhost:8088` for forproxy to analyze the connections.
+The client sets the proxy to `http://localhost:8080` for forproxy to analyze the connections.
 
 ```sh
 $ forproxy
-$ curl -x http://localhost:8088 httpbin.org/ip
+$ curl -x http://localhost:8080 httpbin.org/ip
 ```
 
 ![proxy-mode](https://github.com/sigoden/forproxy/assets/4012553/3649172b-5f8c-40ee-8600-d965eeecc924)
@@ -34,11 +34,11 @@ $ curl -x http://localhost:8088 httpbin.org/ip
 
 **This mode is suitable for scenarios where a proxy cannot be set.**
 
-The client directly requests `http://localhost:8088`, and forproxy forwards the request to `https://httpbin.org`.
+The client directly requests `http://localhost:8080`, and forproxy forwards the request to `https://httpbin.org`.
 
 ```sh
 $ forproxy httpbin.org/ip
-$ curl http://localhost:8088/ip
+$ curl http://localhost:8080/ip
 ```
 
 ![forward-mode](https://github.com/sigoden/forproxy/assets/4012553/74e54b98-92fb-45bb-8d87-3f18e3596a00)
@@ -53,7 +53,7 @@ Arguments:
 
 Options:
   -b, --bind <ADDR>           Specify address to listen on [default: 0.0.0.0]
-  -p, --port <PORT>           Specify port to listen on [default: 8088]
+  -p, --port <PORT>           Specify port to listen on [default: 8080]
   -f, --filters <REGEX>       Only inspect connections whose `{method} {uri}` matches the regex
   -m, --mime-filters <VALUE>  Only inspect connections whose content-type matches the value
   -h, --help                  Print help
@@ -63,7 +63,7 @@ Options:
 Change the bind address and port.
 
 ```sh
-forproxy -b 127.0.0.1 -p 8080
+forproxy -b 127.0.0.1 -p 18080
 ```
 
 Use `-f/--filters` to filter connections by title (`{method} {uri}`).

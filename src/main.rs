@@ -70,7 +70,7 @@ struct Cli {
     #[clap(short = 'b', long, value_name = "ADDR", default_value = "0.0.0.0")]
     pub bind: String,
     /// Specify port to listen on
-    #[clap(short = 'p', long, default_value_t = 8088)]
+    #[clap(short = 'p', long, default_value_t = 8080)]
     pub port: u16,
     /// Only inspect connections whose `{method} {uri}` matches the regex
     #[clap(short = 'f', long, value_name = "REGEX")]
