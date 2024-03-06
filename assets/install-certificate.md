@@ -35,7 +35,7 @@ summary:before {
 
 ### Manual Installation
 
-1.  Double-click the cer file to start the import wizard.
+1.  Double-click the CER file to start the import wizard.
 2.  Select a certificate store location. This determines who will trust the certificate – only the current Windows user or everyone on the machine. Click Next.
 3.  Click Next again.
 4.  Leave Password blank and click Next.
