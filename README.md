@@ -20,28 +20,28 @@ Download from [Github Releases](https://github.com/sigoden/proxyfor/releases), u
 ## Usage
 
 ### Forwarding Proxy
-
-The client sets the proxy to `http://localhost:8080` for proxyfor to capture the http(s) traffic.
+The client sets the proxy to `http://127.0.0.1:8080`.
 
 ```sh
 $ proxyfor
-$ curl -x http://localhost:8080 httpbin.org/ip
+$ curl -x http://127.0.0.1:8080 httpbin.org/ip
 ```
 
-![proxy-mode](https://github.com/sigoden/proxyfor/assets/4012553/3649172b-5f8c-40ee-8600-d965eeecc924)
+![forwarding-proxy](https://github.com/sigoden/proxyfor/assets/4012553/c40cc1be-b9e9-4846-9702-ad3610719b08)
 
 ### Reverse Proxy
 
-**This mode is suitable for scenarios where a proxy cannot be set.**
+The client directly requests `http://127.0.0.1:8080`.
 
-The client directly requests `http://localhost:8080`, and proxyfor forwards the request to `https://httpbin.org`.
+**This mode is suitable for scenarios where client cannot set a proxy.**
 
 ```sh
-$ proxyfor httpbin.org/ip
-$ curl http://localhost:8080/ip
+$ proxyfor https://httpbin.org
+$ curl http://127.0.0.1:8080/ip
 ```
 
-![forward-mode](https://github.com/sigoden/proxyfor/assets/4012553/74e54b98-92fb-45bb-8d87-3f18e3596a00)
+
+![reverse-proxy](https://github.com/sigoden/proxyfor/assets/4012553/789ad353-9fe3-4bff-9f47-f19fd8dc5ce6)
 
 # CLI
 
@@ -67,10 +67,10 @@ proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:18080
 ```
 
-Use `-f/--filters` to filter traffic by title (`{method} {uri}`).
+Use `-f/--filters` to filter traffic by matching `{method} {uri}`.
 
 ```sh
-proxyfor -f httpbin.org -f postman-echo.com
+proxyfor -f httpbin.org/ip -f httpbin.org/anything
 proxyfor -f '/^(get|post) https:\/\/httpbin.org/'       
 ```
 
@@ -90,8 +90,6 @@ proxyfor > proxyfor.md
 ## Certificates
 
 proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts proxyfor’s built-in certificate authority. Usually this means that the proxyfor CA certificate has to be installed on the client device.
-
-The proxyfor CA cert is located in `~/.proxyfor` after it has been generated at the first start of proxyfor.
 
 By far the easiest way to [install the proxyfor CA certificate](./assets/install-certificate.md) is to use the built-in certificate installation app.
 To do this, start proxyfor and configure your target device with the correct proxy settings.
