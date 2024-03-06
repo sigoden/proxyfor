@@ -115,11 +115,8 @@ impl CertificateAuthority {
             .with_no_client_auth()
             .with_single_cert(certs, self.private_key_der.clone_key())?;
 
-        server_cfg.alpn_protocols = vec![
-            #[cfg(feature = "http2")]
-            b"h2".to_vec(),
-            b"http/1.1".to_vec(),
-        ];
+        server_cfg.alpn_protocols =
+            vec![b"h2".to_vec(), b"http/1.1".to_vec(), b"http/1.0".to_vec()];
 
         let server_cfg = Arc::new(server_cfg);
 
