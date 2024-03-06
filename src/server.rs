@@ -101,8 +101,6 @@ No forward target"#
             return self.handle_connect(req, title);
         }
 
-        let mut res = Response::default();
-
         let mut inspect_contents = vec![];
 
         inspect_contents.push(format!("\n# {title}"));
