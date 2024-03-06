@@ -1,32 +1,57 @@
 use anyhow::{anyhow, Context, Result};
 use http::uri::Authority;
 use moka::future::Cache;
-use rand::{thread_rng, Rng};
-use rcgen::{Certificate, CertificateParams, DnType, KeyPair, SanType};
-use std::{io::Cursor, sync::Arc};
+use rand::{rngs::OsRng, thread_rng, Rng};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
+    IsCa, KeyPair, KeyUsagePurpose, SanType,
+};
+use rsa::pkcs8::EncodePrivateKey;
+use rsa::RsaPrivateKey;
+use std::{fs, io::Cursor, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig,
 };
 
+const CA_CERT_FILENAME: &str = "proxyfor-ca-cert.cer";
+const KEY_FILENAME: &str = "proxyfor-key.pem";
 const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
 const NOT_BEFORE_OFFSET: i64 = 60;
-const KEY_DATA: &str = include_str!("../assets/proxyfor-key.pem");
-const CA_CERT_DATA: &str = include_str!("../assets/proxyfor-ca-cert.cer");
 
 pub fn load_ca() -> Result<CertificateAuthority> {
-    let key_err = || "Failed to read private key";
-    let key = KeyPair::from_pem(KEY_DATA).with_context(key_err)?;
-    let key_clone = KeyPair::from_pem(KEY_DATA).with_context(key_err)?;
+    let mut config_dir = dirs::home_dir().ok_or_else(|| anyhow!("No home dir"))?;
+    config_dir.push(".proxyfor");
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir)
+            .with_context(|| format!("Failed to create config dir '{}'", config_dir.display()))?;
+    }
 
-    let ca_err = || "Failed to read CA certificate";
-    let ca_params =
-        CertificateParams::from_ca_cert_pem(CA_CERT_DATA, key_clone).with_context(ca_err)?;
-    let ca_cert = Certificate::from_params(ca_params).with_context(ca_err)?;
+    let ca_file = config_dir.join(CA_CERT_FILENAME);
+    let key_file = config_dir.join(KEY_FILENAME);
+    let (key, ca_cert) = if !ca_file.exists() {
+        let key = gen_private_key().with_context(|| "Failed to generate private key")?;
+        let ca_cert = gen_ca_cert(&key).with_context(|| "Failed to generate CA certificate")?;
+        fs::write(&ca_file, ca_cert.pem())
+            .with_context(|| format!("Failed to save CA certificate to '{}'", ca_file.display()))?;
+        fs::write(&key_file, key.serialize_pem())
+            .with_context(|| format!("Failed to save private key to '{}'", key_file.display()))?;
+        (key, ca_cert)
+    } else {
+        let key_err = || format!("Failed to read private key at '{}'", key_file.display());
+        let key_data = fs::read_to_string(&key_file).with_context(key_err)?;
+        let key = KeyPair::from_pem(&key_data).with_context(key_err)?;
 
-    let mut key_reader = Cursor::new(KEY_DATA);
+        let ca_err = || format!("Failed to read CA certificate at '{}'", ca_file.display());
+        let ca_data = fs::read_to_string(&ca_file).with_context(ca_err)?;
+        let ca_params = CertificateParams::from_ca_cert_pem(&ca_data).with_context(ca_err)?;
+        let ca_cert = Certificate::generate_self_signed(ca_params, &key).with_context(ca_err)?;
+        (key, ca_cert)
+    };
+
+    let mut key_reader = Cursor::new(key.serialize_pem());
     let key_der = rustls_pemfile::read_one(&mut key_reader)
         .ok()
         .flatten()
@@ -68,7 +93,7 @@ impl CertificateAuthority {
     }
 
     pub fn ca_cert_pem(&self) -> String {
-        CA_CERT_DATA.to_string()
+        self.ca_cert.pem()
     }
 
     pub async fn gen_server_config(&self, authority: &Authority) -> Result<Arc<ServerConfig>> {
@@ -109,20 +134,12 @@ impl CertificateAuthority {
             .push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
-            .push(SanType::DnsName(authority.host().into()));
+            .push(SanType::DnsName(Ia5String::try_from(authority.host())?));
 
-        params.alg = self
-            .private_key
-            .compatible_algs()
-            .next()
-            .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
+        let cert =
+            Certificate::generate(params, &self.private_key, &self.ca_cert, &self.private_key)?;
 
-        let private_key_clone = KeyPair::from_pem(&self.private_key.serialize_pem())?;
-        params.key_pair = Some(private_key_clone);
-
-        let cert = Certificate::from_params(params)?;
-        let cert_data = cert.serialize_pem_with_signer(&self.ca_cert)?;
-
+        let cert_data = cert.pem();
         let mut cert_reader = Cursor::new(cert_data.as_bytes());
         let cert = rustls_pemfile::certs(&mut cert_reader)
             .next()
@@ -131,4 +148,42 @@ impl CertificateAuthority {
 
         Ok(cert)
     }
+}
+
+fn gen_private_key() -> Result<KeyPair> {
+    let mut rng = OsRng;
+    let bits = 2048;
+    let private_key = RsaPrivateKey::new(&mut rng, bits)?;
+    let private_key_der = private_key.to_pkcs8_der()?;
+    let private_key = KeyPair::try_from(private_key_der.as_bytes())?;
+    Ok(private_key)
+}
+
+fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
+    let mut params = CertificateParams::default();
+    let (yesterday, tomorrow) = validity_period();
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params
+        .distinguished_name
+        .push(DnType::CommonName, "proxyfor");
+    params
+        .distinguished_name
+        .push(DnType::OrganizationName, "proxyfor");
+    params.not_before = yesterday;
+    params.not_after = tomorrow;
+    params
+        .extended_key_usages
+        .push(ExtendedKeyUsagePurpose::ServerAuth);
+    params.key_usages.push(KeyUsagePurpose::KeyCertSign);
+    params.key_usages.push(KeyUsagePurpose::CrlSign);
+
+    let ca_cert = Certificate::generate_self_signed(params, key)?;
+    Ok(ca_cert)
+}
+
+fn validity_period() -> (OffsetDateTime, OffsetDateTime) {
+    let day = Duration::days(3650);
+    let yesterday = OffsetDateTime::now_utc().checked_sub(day).unwrap();
+    let tomorrow = OffsetDateTime::now_utc().checked_add(day).unwrap();
+    (yesterday, tomorrow)
 }
