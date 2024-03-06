@@ -93,7 +93,7 @@ proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts 
 
 The proxyfor CA cert is located in `~/.proxyfor` after it has been generated at the first start of proxyfor.
 
-By far the easiest way to install the proxyfor CA certificate is to use the built-in certificate installation app.
+By far the easiest way to [install the proxyfor CA certificate](./assets/install-certificate.md) is to use the built-in certificate installation app.
 To do this, start mitmproxy and configure your target device with the correct proxy settings.
 Now start a browser on the device, and visit the magic domain [proxyfor.local](http://proxyfor.local).
 
