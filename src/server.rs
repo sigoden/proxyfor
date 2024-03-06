@@ -8,8 +8,9 @@ use anyhow::Result;
 use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
 use bytes::Bytes;
 use http::{
-    header::CONTENT_TYPE,
+    header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     uri::{Authority, Scheme},
+    HeaderValue,
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
 use hyper::{
@@ -32,6 +33,8 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 
 const HEX_VIEW_SIZE: usize = 320;
+const CERT_SITE_INDEX: &[u8] = include_bytes!("../assets/install-certificate.html");
+const CERT_SITE_URL: &str = "http://proxyfor.local/";
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
@@ -73,6 +76,19 @@ No forward target"#
             return Ok(res);
         };
 
+        if let Some(path) = url.strip_prefix(CERT_SITE_URL) {
+            return match self.handle_cert_site(&mut res, path).await {
+                Ok(()) => Ok(res),
+                Err(err) => {
+                    let body = err.to_string();
+                    let body = Bytes::from(body);
+                    *res.body_mut() = Full::new(body).boxed();
+                    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                    Ok(res)
+                }
+            };
+        }
+
         let title = format!("{method} {url}");
         let mut is_inspect = is_match_title(&self.filters, &title);
 
@@ -84,6 +100,8 @@ No forward target"#
             };
             return self.handle_connect(req, title);
         }
+
+        let mut res = Response::default();
 
         let mut inspect_contents = vec![];
 
@@ -199,6 +217,42 @@ RESPONSE HEADERS
         *res.body_mut() = Full::new(proxy_res_body).boxed();
 
         Ok(res)
+    }
+
+    async fn handle_cert_site(self: Arc<Self>, res: &mut Response, path: &str) -> Result<()> {
+        if path.is_empty() {
+            let body = Bytes::from_static(CERT_SITE_INDEX);
+            let body_size = body.len();
+            *res.body_mut() = Full::new(body).boxed();
+            res.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static("text/html; charset=UTF-8"),
+            );
+            res.headers_mut().insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&body_size.to_string())?,
+            );
+        } else if path == "proxyfor-ca-cert.cer" || path == "proxyfor-ca-cert.pem" {
+            let body = self.ca.ca_cert_pem();
+            let body = Bytes::from(body);
+            let body_size = body.len();
+            *res.body_mut() = Full::new(body).boxed();
+            res.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/x-x509-ca-cert"),
+            );
+            res.headers_mut().insert(
+                CONTENT_LENGTH,
+                HeaderValue::from_str(&body_size.to_string())?,
+            );
+            res.headers_mut().insert(
+                CONTENT_DISPOSITION,
+                HeaderValue::from_str(&format!(r#"attachment; filename="{path}""#))?,
+            );
+        } else {
+            *res.status_mut() = StatusCode::NOT_FOUND;
+        }
+        Ok(())
     }
 
     fn handle_connect(

@@ -92,6 +92,10 @@ impl CertificateAuthority {
         }
     }
 
+    pub fn ca_cert_pem(&self) -> String {
+        self.ca_cert.pem()
+    }
+
     pub async fn gen_server_config(&self, authority: &Authority) -> Result<Arc<ServerConfig>> {
         if let Some(server_cfg) = self.cache.get(authority).await {
             return Ok(server_cfg);
