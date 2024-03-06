@@ -13,7 +13,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder,
 };
-use std::net::{IpAddr, SocketAddr, TcpListener as StdTcpListener};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -45,7 +45,7 @@ async fn main() -> Result<()> {
         mime_filters,
         running: running.clone(),
     });
-    let handle = run(server, ip, port)?;
+    let handle = run(server, ip, port).await?;
     let running = Arc::new(AtomicBool::new(true));
     eprintln!("Listening on {}:{}", ip, port);
     tokio::select! {
@@ -62,8 +62,8 @@ async fn main() -> Result<()> {
     }
 }
 
-fn run(server: Arc<Server>, ip: IpAddr, port: u16) -> Result<JoinHandle<()>> {
-    let listener = create_listener(SocketAddr::new(ip, port))?;
+async fn run(server: Arc<Server>, ip: IpAddr, port: u16) -> Result<JoinHandle<()>> {
+    let listener = TcpListener::bind(SocketAddr::new(ip, port)).await?;
     let handle = tokio::spawn(async move {
         loop {
             let accept = match listener.accept().await {
@@ -111,21 +111,6 @@ fn parse_addr(value: &str) -> Option<(IpAddr, u16)> {
     } else {
         None
     }
-}
-
-fn create_listener(addr: SocketAddr) -> Result<TcpListener> {
-    use socket2::{Domain, Protocol, Socket, Type};
-    let socket = Socket::new(Domain::for_address(addr), Type::STREAM, Some(Protocol::TCP))?;
-    if addr.is_ipv6() {
-        socket.set_only_v6(true)?;
-    }
-    socket.set_reuse_address(true)?;
-    socket.bind(&addr.into())?;
-    socket.listen(1024 /* Default backlog */)?;
-    let std_listener = StdTcpListener::from(socket);
-    std_listener.set_nonblocking(true)?;
-    let listener = TcpListener::from_std(std_listener)?;
-    Ok(listener)
 }
 
 async fn shutdown_signal() {
