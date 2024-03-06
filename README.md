@@ -19,7 +19,7 @@ Download from [Github Releases](https://github.com/sigoden/proxyfor/releases), u
 
 ## Usage
 
-### Proxy Mode
+### Forwarding Proxy
 
 The client sets the proxy to `http://localhost:8080` for proxyfor to capture the http(s) traffic.
 
@@ -30,7 +30,7 @@ $ curl -x http://localhost:8080 httpbin.org/ip
 
 ![proxy-mode](https://github.com/sigoden/proxyfor/assets/4012553/3649172b-5f8c-40ee-8600-d965eeecc924)
 
-### Forward Mode
+### Reverse Proxy
 
 **This mode is suitable for scenarios where a proxy cannot be set.**
 
