@@ -5,6 +5,14 @@
 
 A simple and portable proxy for capturing HTTP and HTTPS traffic.
 
+## Features
+
+- Support forward proxy
+- Support reverse proxy
+- Support filtering
+- Log traffic to markdown
+- Hosted self-signed CA certificate site
+
 ## Installation
 
 ### With cargo
@@ -19,7 +27,8 @@ Download from [Github Releases](https://github.com/sigoden/proxyfor/releases), u
 
 ## Usage
 
-### Forwarding Proxy
+### Forward Proxy
+
 The client sets the proxy to `http://127.0.0.1:8080`.
 
 ```sh
