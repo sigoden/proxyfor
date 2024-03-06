@@ -10,7 +10,7 @@ A simple and portable proxy for capturing HTTP and HTTPS traffic.
 ### With cargo
 
 ```
-cargo install git://github.com/sigoden/proxyfor
+cargo install proxyfor
 ```
 
 ### Binaries on macOS, Linux, Windows
