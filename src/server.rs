@@ -260,6 +260,14 @@ RESPONSE HEADERS
         mut req: Request,
         mut title: Option<String>,
     ) -> Result<Response, hyper::Error> {
+        let mut res = Response::new(BoxBody::new(Empty::new()));
+        let authority = match req.uri().authority().cloned() {
+            Some(authority) => authority,
+            None => {
+                *res.status_mut() = StatusCode::BAD_REQUEST;
+                return Ok(res);
+            }
+        };
         let fut = async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
@@ -290,16 +298,14 @@ RESPONSE HEADERS
                     );
 
                     if buffer == *b"GET " {
-                        if let Err(e) = self.serve_connect_stream(upgraded, Scheme::HTTP).await {
+                        if let Err(e) = self
+                            .serve_connect_stream(upgraded, Scheme::HTTP, authority)
+                            .await
+                        {
                             print_error(format!("Websocket connect error: {e}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
-                        let authority = req
-                            .uri()
-                            .authority()
-                            .expect("Uri doesn't contain authority");
-
-                        let server_config = match self.ca.gen_server_config(authority).await {
+                        let server_config = match self.ca.gen_server_config(&authority).await {
                             Ok(server_config) => server_config,
                             Err(e) => {
                                 print_error(format!("Failed to build server config: {e}"));
@@ -315,7 +321,10 @@ RESPONSE HEADERS
                             }
                         };
 
-                        if let Err(e) = self.serve_connect_stream(stream, Scheme::HTTPS).await {
+                        if let Err(e) = self
+                            .serve_connect_stream(stream, Scheme::HTTPS, authority)
+                            .await
+                        {
                             if !e.to_string().starts_with("error shutting down connection") {
                                 print_error(format!("HTTPS connect error: {e}"));
                             }
@@ -326,13 +335,7 @@ RESPONSE HEADERS
                             &buffer[..bytes_read]
                         ));
 
-                        let authority = req
-                            .uri()
-                            .authority()
-                            .expect("Uri doesn't contain authority")
-                            .as_ref();
-
-                        let mut server = match TcpStream::connect(authority).await {
+                        let mut server = match TcpStream::connect(authority.as_str()).await {
                             Ok(server) => server,
                             Err(e) => {
                                 print_error(format! {"Failed to connect to {authority}: {e}"});
@@ -369,9 +372,10 @@ Upgrade error: {e}"#
 
     async fn serve_connect_stream<I>(
         self: Arc<Self>,
-        io: I,
+        stream: I,
         scheme: Scheme,
-    ) -> Result<(), hyper::Error>
+        authority: Authority,
+    ) -> Result<(), Box<dyn std::error::Error + Sync + Send>>
     where
         I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
@@ -380,16 +384,10 @@ Upgrade error: {e}"#
             {
                 let (mut parts, body) = req.into_parts();
 
-                let authority = parts
-                    .headers
-                    .get(hyper::header::HOST)
-                    .expect("Host is a required header")
-                    .as_bytes();
                 parts.uri = {
                     let mut parts = parts.uri.into_parts();
                     parts.scheme = Some(scheme.clone());
-                    parts.authority =
-                        Some(Authority::try_from(authority).expect("Failed to parse authority"));
+                    parts.authority = Some(authority.clone());
                     Uri::from_parts(parts).expect("Failed to build URI")
                 };
 
@@ -399,10 +397,8 @@ Upgrade error: {e}"#
             self.clone().handle(req)
         });
 
-        let io = TokioIo::new(io);
-        hyper::server::conn::http1::Builder::new()
-            .serve_connection(io, service)
-            .with_upgrades()
+        hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+            .serve_connection_with_upgrades(TokioIo::new(stream), service)
             .await
     }
 }
