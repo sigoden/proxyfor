@@ -3,8 +3,8 @@ use http::uri::Authority;
 use moka::future::Cache;
 use rand::{rngs::OsRng, thread_rng, Rng};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
-    IsCa, KeyPair, KeyUsagePurpose, SanType,
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
+    KeyPair, KeyUsagePurpose, SanType,
 };
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::RsaPrivateKey;
@@ -31,24 +31,29 @@ pub fn load_ca() -> Result<CertificateAuthority> {
 
     let ca_file = config_dir.join(CA_CERT_FILENAME);
     let key_file = config_dir.join(KEY_FILENAME);
-    let (key, ca_cert) = if !ca_file.exists() {
+    let (key, ca_cert, ca_data) = if !ca_file.exists() {
         let key = gen_private_key().with_context(|| "Failed to generate private key")?;
         let ca_cert = gen_ca_cert(&key).with_context(|| "Failed to generate CA certificate")?;
-        fs::write(&ca_file, ca_cert.pem())
+        let ca_data = ca_cert
+            .serialize_pem()
+            .with_context(|| "Failed to generate CA certificate")?;
+        fs::write(&ca_file, &ca_data)
             .with_context(|| format!("Failed to save CA certificate to '{}'", ca_file.display()))?;
         fs::write(&key_file, key.serialize_pem())
             .with_context(|| format!("Failed to save private key to '{}'", key_file.display()))?;
-        (key, ca_cert)
+        (key, ca_cert, ca_data)
     } else {
         let key_err = || format!("Failed to read private key at '{}'", key_file.display());
         let key_data = fs::read_to_string(&key_file).with_context(key_err)?;
         let key = KeyPair::from_pem(&key_data).with_context(key_err)?;
+        let key_clone = KeyPair::from_pem(&key_data).with_context(key_err)?;
 
         let ca_err = || format!("Failed to read CA certificate at '{}'", ca_file.display());
         let ca_data = fs::read_to_string(&ca_file).with_context(ca_err)?;
-        let ca_params = CertificateParams::from_ca_cert_pem(&ca_data).with_context(ca_err)?;
-        let ca_cert = Certificate::generate_self_signed(ca_params, &key).with_context(ca_err)?;
-        (key, ca_cert)
+        let ca_params =
+            CertificateParams::from_ca_cert_pem(&ca_data, key_clone).with_context(ca_err)?;
+        let ca_cert = Certificate::from_params(ca_params).with_context(ca_err)?;
+        (key, ca_cert, ca_data)
     };
 
     let mut key_reader = Cursor::new(key.serialize_pem());
@@ -63,7 +68,7 @@ pub fn load_ca() -> Result<CertificateAuthority> {
         })
         .ok_or_else(|| anyhow!("Invalid private key"))?;
 
-    let ca = CertificateAuthority::new(key, key_der, ca_cert, 1_000);
+    let ca = CertificateAuthority::new(key, key_der, ca_cert, ca_data, 1_000);
     Ok(ca)
 }
 
@@ -71,6 +76,7 @@ pub struct CertificateAuthority {
     private_key: KeyPair,
     private_key_der: PrivateKeyDer<'static>,
     ca_cert: Certificate,
+    ca_data: String,
     cache: Cache<Authority, Arc<ServerConfig>>,
 }
 
@@ -79,12 +85,14 @@ impl CertificateAuthority {
         private_key: KeyPair,
         private_key_der: PrivateKeyDer<'static>,
         ca_cert: Certificate,
+        ca_data: String,
         cache_size: u64,
     ) -> Self {
         Self {
             private_key,
             private_key_der,
             ca_cert,
+            ca_data,
             cache: Cache::builder()
                 .max_capacity(cache_size)
                 .time_to_live(std::time::Duration::from_secs(CACHE_TTL))
@@ -93,7 +101,7 @@ impl CertificateAuthority {
     }
 
     pub fn ca_cert_pem(&self) -> String {
-        self.ca_cert.pem()
+        self.ca_data.clone()
     }
 
     pub async fn gen_server_config(&self, authority: &Authority) -> Result<Arc<ServerConfig>> {
@@ -134,12 +142,20 @@ impl CertificateAuthority {
             .push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
-            .push(SanType::DnsName(Ia5String::try_from(authority.host())?));
+            .push(SanType::DnsName(authority.host().into()));
 
-        let cert =
-            Certificate::generate(params, &self.private_key, &self.ca_cert, &self.private_key)?;
+        params.alg = self
+            .private_key
+            .compatible_algs()
+            .next()
+            .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
 
-        let cert_data = cert.pem();
+        let private_key_clone = KeyPair::from_pem(&self.private_key.serialize_pem())?;
+        params.key_pair = Some(private_key_clone);
+
+        let cert = Certificate::from_params(params)?;
+        let cert_data = cert.serialize_pem_with_signer(&self.ca_cert)?;
+
         let mut cert_reader = Cursor::new(cert_data.as_bytes());
         let cert = rustls_pemfile::certs(&mut cert_reader)
             .next()
@@ -177,7 +193,15 @@ fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
     params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     params.key_usages.push(KeyUsagePurpose::CrlSign);
 
-    let ca_cert = Certificate::generate_self_signed(params, key)?;
+    params.alg = key
+        .compatible_algs()
+        .next()
+        .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
+
+    let private_key_clone = KeyPair::from_pem(&key.serialize_pem())?;
+    params.key_pair = Some(private_key_clone);
+
+    let ca_cert = Certificate::from_params(params)?;
     Ok(ca_cert)
 }
 
