@@ -90,10 +90,16 @@ proxyfor -m application/json -m application/ld+json
 proxyfor -m text/
 ```
 
-Pipe it to a markdown file, then analyze the captured traffic using your favorite editor/IDE with folding, navigation, search capabilities.
+Pipe it to a markdown file, then view the captured traffic using your favorite editor/IDE with syntax highlighting, folding, search capabilities.
 
 ```sh
 proxyfor > proxyfor.md
+```
+
+Use grep to dump title only
+
+```sh
+proxyfor | grep '^# [A-Z]'
 ```
 
 ## Certificates

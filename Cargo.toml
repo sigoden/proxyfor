@@ -33,6 +33,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "
 tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
 tokio-rustls = "0.25.0"
 
+[dev-dependencies]
+pretty_assertions = "1.4.0"
+
 [profile.release]
 lto = true
 strip = true
