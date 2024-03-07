@@ -58,7 +58,7 @@ $ curl http://127.0.0.1:8080/ip
 Usage: proxyfor [OPTIONS] [URL]
 
 Arguments:
-  [URL]  Forward url
+  [URL]  Reverse proxy url
 
 Options:
   -l, --listen <ADDR>         Listening ip and port address [default: 0.0.0.0:8080]

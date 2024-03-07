@@ -27,7 +27,7 @@ async fn main() -> Result<()> {
     let (ip, port) =
         parse_addr(&cli.listen).ok_or_else(|| anyhow!("Invalid addr '{}'", cli.listen))?;
     let running = Arc::new(AtomicBool::new(true));
-    let forward_url = cli.forward_url.map(|url| {
+    let reverse_proxy_url = cli.reverse_proxy_url.map(|url| {
         if !url.starts_with("http://") && !url.starts_with("https://") {
             format!("http://{}", url)
         } else {
@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
     let mime_filters: Vec<String> = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
     let no_filter = filters.is_empty() && mime_filters.is_empty();
     let server = Arc::new(Server {
-        forward_url,
+        reverse_proxy_url,
         ca,
         no_filter,
         filters,
