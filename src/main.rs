@@ -1,6 +1,7 @@
 mod certificate_authority;
 mod cli;
 mod filter;
+mod recorder;
 mod rewind;
 mod server;
 

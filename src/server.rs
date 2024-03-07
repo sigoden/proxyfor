@@ -1,6 +1,7 @@
 use crate::{
     certificate_authority::CertificateAuthority,
     filter::{is_match_title, is_match_type, Filter},
+    recorder::Recorder,
     rewind::Rewind,
 };
 
@@ -32,7 +33,6 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 
-const HEX_VIEW_SIZE: usize = 320;
 const CERT_SITE_INDEX: &[u8] = include_bytes!("../assets/install-certificate.html");
 const CERT_SITE_URL: &str = "http://proxyfor.local/";
 
@@ -53,25 +53,22 @@ impl Server {
     pub(crate) async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
 
-        let req_path = req.uri().to_string();
+        let path = req.uri().to_string();
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
-        let url = if !req_path.starts_with('/') {
-            req_path.clone()
+        let url = if !path.starts_with('/') {
+            path.clone()
         } else if let Some(base_url) = &self.reverse_proxy_url {
-            if req_path == "/" {
+            if path == "/" {
                 base_url.clone()
             } else {
-                format!("{base_url}{req_path}")
+                format!("{base_url}{path}")
             }
         } else {
-            println!(
-                r#"
-# {method} {req_path}
-
-No forward target"#
-            );
+            Recorder::new(path.clone(), method.clone())
+                .set_error("No reserver proxy url".to_string())
+                .print();
             *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
             return Ok(res);
         };
@@ -89,39 +86,30 @@ No forward target"#
             };
         }
 
-        let title = format!("{method} {url}");
-        let mut is_inspect = is_match_title(&self.filters, &title);
+        let mut should_print = is_match_title(&self.filters, &format!("{method} {url}"));
 
         if method == Method::CONNECT {
-            let title = if is_inspect && !self.no_filter {
-                Some(title.clone())
+            let recorder = if should_print && !self.no_filter {
+                Some(Recorder::new(path.clone(), method.clone()))
             } else {
                 None
             };
-            return self.handle_connect(req, title);
+            return self.handle_connect(req, recorder);
         }
 
-        let mut inspect_contents = vec![];
+        let mut recorder = Recorder::new(path.clone(), method.clone());
 
-        inspect_contents.push(format!("\n# {title}"));
+        recorder = recorder.set_req_headers(req_headers.clone());
 
-        inspect_contents.push(format!(
-            r#"REQUEST HEADERS
-```
-{req_headers:?}
-```"#
-        ));
+        let req_body = match req.collect().await {
+            Ok(v) => v.to_bytes(),
+            Err(err) => {
+                internal_server_error(&mut res, err, should_print, recorder);
+                return Ok(res);
+            }
+        };
 
-        let req_body = req.collect().await?.to_bytes();
-        if !req_body.is_empty() {
-            let req_body_pretty = format_bytes(&req_body);
-            inspect_contents.push(format!(
-                r#"REQUEST BODY
-```
-{req_body_pretty}
-```"#
-            ));
-        }
+        recorder = recorder.set_req_body(req_body.clone());
 
         let mut builder = hyper::Request::builder().uri(&url).method(method.clone());
         for (key, value) in req_headers.iter() {
@@ -134,7 +122,7 @@ No forward target"#
         let proxy_req = match builder.body(Full::new(req_body)) {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err, is_inspect, &mut inspect_contents);
+                internal_server_error(&mut res, err, should_print, recorder);
                 return Ok(res);
             }
         };
@@ -157,7 +145,7 @@ No forward target"#
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err, is_inspect, &mut inspect_contents);
+                internal_server_error(&mut res, err, should_print, recorder);
                 return Ok(res);
             }
         };
@@ -165,12 +153,12 @@ No forward target"#
         let proxy_res_status = proxy_res.status();
         let proxy_res_headers = proxy_res.headers().clone();
 
-        if is_inspect {
+        if should_print {
             if let Some(header_value) = proxy_res_headers
                 .get(CONTENT_TYPE)
                 .and_then(|v| v.to_str().ok())
             {
-                is_inspect = is_match_type(&self.mime_filters, header_value)
+                should_print = is_match_type(&self.mime_filters, header_value)
             }
         };
 
@@ -185,31 +173,26 @@ No forward target"#
             res.headers_mut().insert(key.clone(), value.clone());
         }
 
-        let proxy_res_body = proxy_res.collect().await?.to_bytes();
+        let proxy_res_body = match proxy_res.collect().await {
+            Ok(v) => v.to_bytes(),
+            Err(err) => {
+                internal_server_error(&mut res, err, should_print, recorder);
+                return Ok(res);
+            }
+        };
 
-        if is_inspect {
-            inspect_contents.push(format!(
-                r#"RESPONSE STATUS: {proxy_res_status}
-
-RESPONSE HEADERS
-```
-{proxy_res_headers:?}
-```"#
-            ));
+        if should_print {
+            recorder = recorder
+                .set_res_status(proxy_res_status)
+                .set_res_headers(proxy_res_headers.clone());
 
             if !proxy_res_body.is_empty() {
                 let decompress_body = decompress(&proxy_res_body, encoding)
                     .await
                     .unwrap_or_else(|| proxy_res_body.to_vec());
-                let proxy_res_body_pretty = format_bytes(&decompress_body);
-                inspect_contents.push(format!(
-                    r#"RESPONSE BODY
-```
-{proxy_res_body_pretty}
-```"#
-                ));
+                recorder = recorder.set_res_body(Bytes::from(decompress_body));
             }
-            println!("{}", inspect_contents.join("\n\n"))
+            recorder.print();
         }
 
         *res.body_mut() = Full::new(proxy_res_body).boxed();
@@ -256,7 +239,7 @@ RESPONSE HEADERS
     fn handle_connect(
         self: Arc<Self>,
         mut req: Request,
-        mut title: Option<String>,
+        mut recorder: Option<Recorder>,
     ) -> Result<Response, hyper::Error> {
         let mut res = Response::new(BoxBody::new(Empty::new()));
         let authority = match req.uri().authority().cloned() {
@@ -269,14 +252,9 @@ RESPONSE HEADERS
         let fut = async move {
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    let mut print_error = |err: String| {
-                        if let Some(title) = title.take() {
-                            println!(
-                                r#"
-# {title}
-
-{err}"#
-                            );
+                    let mut record_error = |err: String| {
+                        if let Some(recorder) = recorder.take() {
+                            recorder.set_error(err).print()
                         }
                     };
                     let mut upgraded = TokioIo::new(upgraded);
@@ -285,7 +263,7 @@ RESPONSE HEADERS
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
                         Err(e) => {
-                            print_error(format!("Failed to read from upgraded connection: {e}"));
+                            record_error(format!("Failed to read from upgraded connection: {e}"));
                             return;
                         }
                     };
@@ -300,13 +278,13 @@ RESPONSE HEADERS
                             .serve_connect_stream(upgraded, Scheme::HTTP, authority)
                             .await
                         {
-                            print_error(format!("Websocket connect error: {e}"));
+                            record_error(format!("Websocket connect error: {e}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let server_config = match self.ca.gen_server_config(&authority).await {
                             Ok(server_config) => server_config,
                             Err(e) => {
-                                print_error(format!("Failed to build server config: {e}"));
+                                record_error(format!("Failed to build server config: {e}"));
                                 return;
                             }
                         };
@@ -314,7 +292,7 @@ RESPONSE HEADERS
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
                             Err(e) => {
-                                print_error(format!("Failed to establish TLS Connection: {e}"));
+                                record_error(format!("Failed to establish TLS Connection: {e}"));
                                 return;
                             }
                         };
@@ -324,11 +302,11 @@ RESPONSE HEADERS
                             .await
                         {
                             if !e.to_string().starts_with("error shutting down connection") {
-                                print_error(format!("HTTPS connect error: {e}"));
+                                record_error(format!("HTTPS connect error: {e}"));
                             }
                         }
                     } else {
-                        print_error(format!(
+                        record_error(format!(
                             "Unknown protocol, read '{:02X?}' from upgraded connection",
                             &buffer[..bytes_read]
                         ));
@@ -336,7 +314,7 @@ RESPONSE HEADERS
                         let mut server = match TcpStream::connect(authority.as_str()).await {
                             Ok(server) => server,
                             Err(e) => {
-                                print_error(format! {"Failed to connect to {authority}: {e}"});
+                                record_error(format! {"Failed to connect to {authority}: {e}"});
                                 return;
                             }
                         };
@@ -344,7 +322,7 @@ RESPONSE HEADERS
                         if let Err(e) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
-                            print_error(format!(
+                            record_error(format!(
                                 "Failed to tunnel unknown protocol to {}: {}",
                                 authority, e
                             ));
@@ -352,13 +330,8 @@ RESPONSE HEADERS
                     }
                 }
                 Err(e) => {
-                    if let Some(title) = title.take() {
-                        println!(
-                            r#"
-# {title}
-
-Upgrade error: {e}"#
-                        );
+                    if let Some(recorder) = recorder.take() {
+                        recorder.set_error(format!("Upgrade error: {e}")).print();
                     }
                 }
             };
@@ -404,12 +377,11 @@ Upgrade error: {e}"#
 fn internal_server_error<T: Display>(
     res: &mut Response,
     err: T,
-    is_inspect: bool,
-    inspect_contents: &mut Vec<String>,
+    should_print: bool,
+    recorder: Recorder,
 ) {
-    if is_inspect {
-        inspect_contents.push(err.to_string());
-        println!("{}", inspect_contents.join("\n\n"))
+    if should_print {
+        recorder.set_error(err.to_string()).print();
     }
     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 }
@@ -437,17 +409,3 @@ macro_rules! decompress_fn {
 decompress_fn!(decompress_deflate, DeflateDecoder);
 decompress_fn!(decompress_gzip, GzipDecoder);
 decompress_fn!(decompress_br, BrotliDecoder);
-
-fn format_bytes(data: &[u8]) -> String {
-    if let Ok(value) = std::str::from_utf8(data) {
-        value.to_string()
-    } else if data.len() > HEX_VIEW_SIZE * 2 {
-        format!(
-            "{}\n......\n{}",
-            hexplay::HexView::new(&data[0..HEX_VIEW_SIZE]),
-            hexplay::HexView::new(&data[data.len() - HEX_VIEW_SIZE..])
-        )
-    } else {
-        hexplay::HexView::new(data).to_string()
-    }
-}
