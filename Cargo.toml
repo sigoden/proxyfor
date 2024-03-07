@@ -1,6 +1,6 @@
 [package]
 name = "proxyfor"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
 description = "A simple and portable proxy for capturing HTTP and HTTPS traffic."
