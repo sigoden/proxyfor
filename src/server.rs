@@ -36,10 +36,10 @@ use tokio::{
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::BroadcastStream;
 
-const CERT_SITE_INDEX: &str = include_str!("../assets/install-certificate.html");
-const WEBUI_INDEX: &str = include_str!("../assets/webui.html");
-const CERT_SITE_URL: &str = "http://proxyfor.local/";
-pub(crate) const WEBUI_PREFIX: &str = "/__proxyfor__";
+const WEB_INDEX: &str = include_str!("../assets/index.html");
+const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
+const CERT_PREFIX: &str = "http://proxyfor.local/";
+pub(crate) const WEB_PREFIX: &str = "/__proxyfor__";
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
@@ -62,7 +62,7 @@ impl Server {
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
-        let url = if !req_uri.starts_with('/') || req_uri.starts_with(WEBUI_PREFIX) {
+        let url = if !req_uri.starts_with('/') || req_uri.starts_with(WEB_PREFIX) {
             req_uri.clone()
         } else if let Some(base_url) = &self.reverse_proxy_url {
             if req_uri == "/" {
@@ -84,8 +84,8 @@ impl Server {
             None => url.as_str(),
         };
 
-        if let Some(path) = path.strip_prefix(CERT_SITE_URL) {
-            return match self.handle_cert_site(&mut res, path).await {
+        if let Some(path) = path.strip_prefix(CERT_PREFIX) {
+            return match self.handle_cert_index(&mut res, path).await {
                 Ok(()) => Ok(res),
                 Err(err) => {
                     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
@@ -93,14 +93,14 @@ impl Server {
                     Ok(res)
                 }
             };
-        } else if let Some(path) = path.strip_prefix(WEBUI_PREFIX) {
+        } else if let Some(path) = path.strip_prefix(WEB_PREFIX) {
             if method != Method::GET {
                 *res.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
                 return Ok(res);
             }
             set_cors_header(&mut res);
             let ret = if path.is_empty() || path == "/" {
-                self.handle_webui_index(&mut res).await
+                self.handle_web_index(&mut res).await
             } else if path == "/subscribe" {
                 self.handle_subscribe(&mut res).await
             } else if path == "/traffics" {
@@ -229,9 +229,9 @@ impl Server {
         Ok(res)
     }
 
-    async fn handle_cert_site(self: Arc<Self>, res: &mut Response, path: &str) -> Result<()> {
+    async fn handle_cert_index(self: Arc<Self>, res: &mut Response, path: &str) -> Result<()> {
         if path.is_empty() {
-            set_res_body(res, CERT_SITE_INDEX.to_string());
+            set_res_body(res, CERT_INDEX.to_string());
             res.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static("text/html; charset=UTF-8"),
@@ -253,8 +253,8 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_webui_index(self: &Arc<Self>, res: &mut Response) -> Result<()> {
-        set_res_body(res, WEBUI_INDEX.to_string());
+    async fn handle_web_index(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+        set_res_body(res, WEB_INDEX.to_string());
         res.headers_mut().insert(
             CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=UTF-8"),

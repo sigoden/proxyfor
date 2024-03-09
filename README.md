@@ -10,9 +10,9 @@ A simple and portable proxy for capturing HTTP and HTTPS traffic.
 - Support forward proxy
 - Support reverse proxy
 - Support filtering
-- Integrate WebUI
+- Integrated web inteface
+- Integrated certificates installation webapp
 - Log traffic to markdown
-- Hosted self-signed CA certificate site
 
 ## Installation
 
@@ -53,13 +53,13 @@ $ curl http://127.0.0.1:8080/ip
 
 ![reverse-proxy](https://github.com/sigoden/proxyfor/assets/4012553/789ad353-9fe3-4bff-9f47-f19fd8dc5ce6)
 
-## WebUI
+## Web Interface
 
 Proxyfor provides a web-based user interface that allows you to interactively inspect the HTTP traffic. All traffic is kept in memory, which means that it’s intended for small-ish samples.
 
-![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/55c674a0-c897-4841-93ba-0aeb9fadf224)
+![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/b0eb46da-8e6f-4e96-86a4-64cd623bd608)
 
-## CLI
+## Command Line
 
 ```
 Usage: proxyfor [OPTIONS] [URL]

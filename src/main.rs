@@ -10,7 +10,7 @@ use crate::{
     certificate_authority::load_ca,
     cli::Cli,
     filter::parse_filters,
-    server::{Server, WEBUI_PREFIX},
+    server::{Server, WEB_PREFIX},
 };
 
 use anyhow::{anyhow, Result};
@@ -55,8 +55,8 @@ async fn main() -> Result<()> {
     let running = Arc::new(AtomicBool::new(true));
     eprintln!("Listening on {}:{}", ip, port);
     eprintln!(
-        "Web server works on http://{}:{}{}/",
-        ip, port, WEBUI_PREFIX
+        "Web inteface accessible at http://{}:{}{}/",
+        ip, port, WEB_PREFIX
     );
     tokio::select! {
         ret = handle => {
