@@ -39,7 +39,7 @@ use tokio_stream::wrappers::BroadcastStream;
 const CERT_SITE_INDEX: &str = include_str!("../assets/install-certificate.html");
 const WEBUI_INDEX: &str = include_str!("../assets/webui.html");
 const CERT_SITE_URL: &str = "http://proxyfor.local/";
-const WEBUI_PREFIX: &str = "/__proxyfor__";
+pub(crate) const WEBUI_PREFIX: &str = "/__proxyfor__";
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
@@ -94,14 +94,19 @@ impl Server {
                 }
             };
         } else if let Some(path) = path.strip_prefix(WEBUI_PREFIX) {
+            if method != Method::GET {
+                *res.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
+                return Ok(res);
+            }
+            set_cors_header(&mut res);
             let ret = if path.is_empty() || path == "/" {
                 self.handle_webui_index(&mut res).await
             } else if path == "/subscribe" {
-                self.handle_subscribe_traffic(&mut res).await
+                self.handle_subscribe(&mut res).await
             } else if path == "/traffics" {
-                self.handle_list_traffis(&mut res).await
+                self.handle_list_traffics(&mut res).await
             } else if let Some(id) = path.strip_prefix("/traffic/") {
-                self.handle_traffic_info(&mut res, id).await
+                self.handle_get_traffic(&mut res, id).await
             } else {
                 *res.status_mut() = StatusCode::NOT_FOUND;
                 return Ok(res);
@@ -113,7 +118,9 @@ impl Server {
             return Ok(res);
         }
 
+        let version = req.version();
         let mut recorder = Recorder::new(&req_uri, method.as_str());
+        recorder.set_version(&version);
 
         recorder.control_dump(is_match_title(&self.filters, &format!("{method} {url}")));
 
@@ -252,33 +259,36 @@ impl Server {
             CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=UTF-8"),
         );
-        Ok(())
-    }
-
-    async fn handle_subscribe_traffic(self: &Arc<Self>, res: &mut Response) -> Result<()> {
-        let (init_data, receiver) = (self.state.list(), self.state.subscribe());
-        let stream = BroadcastStream::new(receiver);
-        let stream = stream
-            .map_ok(|head| subscribe_json_frame(&head))
-            .map_err(|err| anyhow!("{err}"));
-        let body = if init_data.is_empty() {
-            BodyExt::boxed(StreamBody::new(stream))
-        } else {
-            let init_stream = stream::iter(
-                init_data
-                    .into_iter()
-                    .map(|head| Ok(subscribe_json_frame(&head))),
-            );
-            let combined_stream = init_stream.chain(stream);
-            BodyExt::boxed(StreamBody::new(combined_stream))
-        };
-        *res.body_mut() = body;
         res.headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         Ok(())
     }
 
-    async fn handle_list_traffis(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+    async fn handle_subscribe(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+        let (init_data, receiver) = (self.state.list(), self.state.subscribe());
+        let stream = BroadcastStream::new(receiver);
+        let stream = stream
+            .map_ok(|head| ndjson_frame(&head))
+            .map_err(|err| anyhow!("{err}"));
+        let body = if init_data.is_empty() {
+            BodyExt::boxed(StreamBody::new(stream))
+        } else {
+            let init_stream =
+                stream::iter(init_data.into_iter().map(|head| Ok(ndjson_frame(&head))));
+            let combined_stream = init_stream.chain(stream);
+            BodyExt::boxed(StreamBody::new(combined_stream))
+        };
+        *res.body_mut() = body;
+        res.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-ndjson; charset=UTF-8"),
+        );
+        res.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(())
+    }
+
+    async fn handle_list_traffics(self: &Arc<Self>, res: &mut Response) -> Result<()> {
         set_res_body(res, serde_json::to_string_pretty(&self.state.list())?);
         res.headers_mut().insert(
             CONTENT_TYPE,
@@ -289,7 +299,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_traffic_info(self: &Arc<Self>, res: &mut Response, id: &str) -> Result<()> {
+    async fn handle_get_traffic(self: &Arc<Self>, res: &mut Response, id: &str) -> Result<()> {
         match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
             Some(traffic) => {
                 set_res_body(res, serde_json::to_string_pretty(&traffic)?);
@@ -443,7 +453,7 @@ impl Server {
 
     fn take_recorder(self: Arc<Self>, recorder: Recorder) {
         recorder.print();
-        self.state.add_trafic(recorder.take_traffic())
+        self.state.add_traffic(recorder.take_traffic())
     }
 
     fn internal_server_error<T: std::fmt::Display>(
@@ -466,7 +476,22 @@ fn set_res_body(res: &mut Response, body: String) {
     *res.body_mut() = Full::new(body).map_err(|err| anyhow!("{err}")).boxed();
 }
 
-fn subscribe_json_frame<T: Serialize>(head: &T) -> Frame<Bytes> {
+fn set_cors_header(res: &mut Response) {
+    res.headers_mut().insert(
+        hyper::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+        hyper::header::HeaderValue::from_static("*"),
+    );
+    res.headers_mut().insert(
+        hyper::header::ACCESS_CONTROL_ALLOW_METHODS,
+        hyper::header::HeaderValue::from_static("GET,POST,PUT,PATCH,DELETE"),
+    );
+    res.headers_mut().insert(
+        hyper::header::ACCESS_CONTROL_ALLOW_HEADERS,
+        hyper::header::HeaderValue::from_static("Content-Type,Authorization"),
+    );
+}
+
+fn ndjson_frame<T: Serialize>(head: &T) -> Frame<Bytes> {
     let data = match serde_json::to_string(head) {
         Ok(data) => format!("{data}\n"),
         Err(_) => String::new(),

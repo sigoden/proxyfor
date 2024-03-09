@@ -16,6 +16,7 @@ pub(crate) struct Head {
     id: usize,
     method: String,
     uri: String,
+    status: Option<u16>,
 }
 
 impl State {
@@ -27,7 +28,7 @@ impl State {
         }
     }
 
-    pub(crate) fn add_trafic(&self, traffic: Traffic) {
+    pub(crate) fn add_traffic(&self, traffic: Traffic) {
         let Ok(mut entries) = self.entries.lock() else {
             return;
         };
@@ -59,11 +60,12 @@ impl State {
 
 impl Head {
     pub(crate) fn new(id: usize, traffic: &Traffic) -> Self {
-        let (method, uri) = traffic.head();
+        let (method, uri, status) = traffic.head();
         Self {
             id,
             method: method.to_string(),
             uri: uri.to_string(),
+            status,
         }
     }
 }

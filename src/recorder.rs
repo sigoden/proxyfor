@@ -1,10 +1,11 @@
+use std::borrow::Cow;
+
 use anyhow::Result;
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use bytes::Bytes;
-use http::{HeaderMap, StatusCode};
+use http::{HeaderMap, StatusCode, Version};
 use indexmap::IndexMap;
 use serde::{Serialize, Serializer};
-use std::borrow::Cow;
 
 const HEX_VIEW_SIZE: usize = 320;
 
@@ -18,10 +19,11 @@ pub struct Recorder {
 pub struct Traffic {
     uri: String,
     method: String,
+    version: Option<String>,
     req_headers: Option<Headers>,
     #[serde(serialize_with = "serialize_optional_bytes")]
     req_body: Option<Bytes>,
-    res_status: Option<u16>,
+    status: Option<u16>,
     res_headers: Option<Headers>,
     #[serde(serialize_with = "serialize_optional_bytes")]
     res_body: Option<Bytes>,
@@ -39,7 +41,11 @@ impl Recorder {
         }
     }
 
-    // Remove the unused functions
+    pub fn set_version(&mut self, version: &Version) -> &mut Self {
+        self.traffic.version = Some(format!("{version:?}"));
+        self
+    }
+
     pub fn set_req_headers(&mut self, headers: &HeaderMap) -> &mut Self {
         self.traffic.req_headers = Some(convert_headers(headers));
         self
@@ -55,7 +61,7 @@ impl Recorder {
     }
 
     pub fn set_res_status(&mut self, status: StatusCode) -> &mut Self {
-        self.traffic.res_status = Some(status.into());
+        self.traffic.status = Some(status.into());
         self
     }
 
@@ -99,9 +105,10 @@ impl Traffic {
         Self {
             uri: uri.to_string(),
             method: method.to_string(),
+            version: None,
             req_headers: None,
             req_body: None,
-            res_status: None,
+            status: None,
             res_headers: None,
             res_body: None,
             error: None,
@@ -117,8 +124,8 @@ impl Traffic {
         }
     }
 
-    pub fn head(&self) -> (&str, &str) {
-        (&self.method, &self.uri)
+    pub fn head(&self) -> (&str, &str, Option<u16>) {
+        (&self.method, &self.uri, self.status)
     }
 
     pub fn to_markdown(&self) -> String {
@@ -133,7 +140,7 @@ impl Traffic {
             lines.push(render_body("REQUEST BODY", body, &self.req_headers));
         }
 
-        if let Some(status) = &self.res_status {
+        if let Some(status) = &self.status {
             lines.push(format!("RESPONSE STATUS: {status}"));
         }
 
@@ -158,10 +165,8 @@ pub(crate) struct ErrorRecorder {
 }
 
 impl ErrorRecorder {
-    pub fn new(reocorder: Recorder) -> Self {
-        Self {
-            recorder: reocorder,
-        }
+    pub fn new(recorder: Recorder) -> Self {
+        Self { recorder }
     }
 
     pub fn add_error(&mut self, error: String) -> &mut Self {
@@ -278,17 +283,27 @@ where
     S: Serializer,
 {
     match value {
-        Some(bytes) => serializer.serialize_some(&encode_bytes(bytes)),
+        Some(bytes) => {
+            let bytes = match std::str::from_utf8(bytes) {
+                Ok(value) => SerBytes {
+                    encode: "utf8",
+                    value: Cow::Borrowed(value),
+                },
+                Err(_) => SerBytes {
+                    encode: "base64",
+                    value: Cow::Owned(STANDARD.encode(bytes)),
+                },
+            };
+            serializer.serialize_some(&bytes)
+        }
         None => serializer.serialize_none(),
     }
 }
 
-fn encode_bytes(data: &[u8]) -> Cow<str> {
-    if let Ok(value) = std::str::from_utf8(data) {
-        Cow::Borrowed(value)
-    } else {
-        Cow::Owned(STANDARD.encode(data))
-    }
+#[derive(Serialize)]
+struct SerBytes<'a> {
+    encode: &'a str,
+    value: Cow<'a, str>,
 }
 
 #[cfg(test)]

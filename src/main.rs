@@ -6,7 +6,12 @@ mod rewind;
 mod server;
 mod state;
 
-use crate::{certificate_authority::load_ca, cli::Cli, filter::parse_filters, server::Server};
+use crate::{
+    certificate_authority::load_ca,
+    cli::Cli,
+    filter::parse_filters,
+    server::{Server, WEBUI_PREFIX},
+};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -49,6 +54,10 @@ async fn main() -> Result<()> {
     let handle = run(server, ip, port).await?;
     let running = Arc::new(AtomicBool::new(true));
     eprintln!("Listening on {}:{}", ip, port);
+    eprintln!(
+        "Web server works on http://{}:{}{}/",
+        ip, port, WEBUI_PREFIX
+    );
     tokio::select! {
         ret = handle => {
             if let Err(e) = ret {
