@@ -4,6 +4,7 @@ mod filter;
 mod recorder;
 mod rewind;
 mod server;
+mod state;
 
 use crate::{certificate_authority::load_ca, cli::Cli, filter::parse_filters, server::Server};
 
@@ -37,13 +38,12 @@ async fn main() -> Result<()> {
     });
     let filters = parse_filters(&cli.filters)?;
     let mime_filters: Vec<String> = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
-    let no_filter = filters.is_empty() && mime_filters.is_empty();
     let server = Arc::new(Server {
         reverse_proxy_url,
         ca,
-        no_filter,
         filters,
         mime_filters,
+        state: state::State::new(),
         running: running.clone(),
     });
     let handle = run(server, ip, port).await?;
@@ -86,16 +86,9 @@ where
     let hyper_service =
         service_fn(move |request: hyper::Request<Incoming>| handle.clone().handle(request));
 
-    let ret = Builder::new(TokioExecutor::new())
+    let _ = Builder::new(TokioExecutor::new())
         .serve_connection_with_upgrades(stream, hyper_service)
         .await;
-
-    if let Err(err) = ret {
-        match err.downcast_ref::<std::io::Error>() {
-            Some(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {}
-            _ => eprintln!("Serving connection {}", err),
-        }
-    }
 }
 
 fn parse_addr(value: &str) -> Option<(IpAddr, u16)> {

@@ -1,21 +1,23 @@
 use crate::{
     certificate_authority::CertificateAuthority,
     filter::{is_match_title, is_match_type, Filter},
-    recorder::Recorder,
+    recorder::{ErrorRecorder, Recorder},
     rewind::Rewind,
+    state::State,
 };
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
 use bytes::Bytes;
+use futures_util::{stream, StreamExt, TryStreamExt};
 use http::{
-    header::{CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
     uri::{Authority, Scheme},
     HeaderValue,
 };
-use http_body_util::{combinators::BoxBody, BodyExt, Empty, Full};
+use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
-    body::Incoming,
+    body::{Frame, Incoming},
     header::{CONTENT_ENCODING, HOST},
     service::service_fn,
     Method, StatusCode, Uri,
@@ -25,26 +27,29 @@ use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
 };
+use serde::Serialize;
 use std::sync::{atomic::AtomicBool, Arc};
-use std::{convert::Infallible, fmt::Display};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::TcpStream,
 };
 use tokio_rustls::TlsAcceptor;
+use tokio_stream::wrappers::BroadcastStream;
 
-const CERT_SITE_INDEX: &[u8] = include_bytes!("../assets/install-certificate.html");
+const CERT_SITE_INDEX: &str = include_str!("../assets/install-certificate.html");
+const WEBUI_INDEX: &str = include_str!("../assets/webui.html");
 const CERT_SITE_URL: &str = "http://proxyfor.local/";
+const WEBUI_PREFIX: &str = "/__proxyfor__";
 
 type Request = hyper::Request<Incoming>;
-type Response = hyper::Response<BoxBody<Bytes, Infallible>>;
+type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
 
 pub(crate) struct Server {
     pub(crate) reverse_proxy_url: Option<String>,
     pub(crate) ca: CertificateAuthority,
     pub(crate) filters: Vec<Filter>,
     pub(crate) mime_filters: Vec<String>,
-    pub(crate) no_filter: bool,
+    pub(crate) state: State,
     #[allow(unused)]
     pub(crate) running: Arc<AtomicBool>,
 }
@@ -53,63 +58,81 @@ impl Server {
     pub(crate) async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
 
-        let path = req.uri().to_string();
+        let req_uri = req.uri().to_string();
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
-        let url = if !path.starts_with('/') {
-            path.clone()
+        let url = if !req_uri.starts_with('/') || req_uri.starts_with(WEBUI_PREFIX) {
+            req_uri.clone()
         } else if let Some(base_url) = &self.reverse_proxy_url {
-            if path == "/" {
+            if req_uri == "/" {
                 base_url.clone()
             } else {
-                format!("{base_url}{path}")
+                format!("{base_url}{req_uri}")
             }
         } else {
-            Recorder::new(path.clone(), method.clone())
-                .set_error("No reserver proxy url".to_string())
-                .print();
-            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            self.internal_server_error(
+                &mut res,
+                "No reserver proxy url",
+                Recorder::new(&req_uri, method.as_str()),
+            );
             return Ok(res);
         };
 
-        if let Some(path) = url.strip_prefix(CERT_SITE_URL) {
+        let path = match url.split_once('?') {
+            Some((v, _)) => v,
+            None => url.as_str(),
+        };
+
+        if let Some(path) = path.strip_prefix(CERT_SITE_URL) {
             return match self.handle_cert_site(&mut res, path).await {
                 Ok(()) => Ok(res),
                 Err(err) => {
-                    let body = err.to_string();
-                    let body = Bytes::from(body);
-                    *res.body_mut() = Full::new(body).boxed();
                     *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                    set_res_body(&mut res, err.to_string());
                     Ok(res)
                 }
             };
+        } else if let Some(path) = path.strip_prefix(WEBUI_PREFIX) {
+            let ret = if path.is_empty() || path == "/" {
+                self.handle_webui_index(&mut res).await
+            } else if path == "/subscribe" {
+                self.handle_subscribe_traffic(&mut res).await
+            } else if path == "/traffics" {
+                self.handle_list_traffis(&mut res).await
+            } else if let Some(id) = path.strip_prefix("/traffic/") {
+                self.handle_traffic_info(&mut res, id).await
+            } else {
+                *res.status_mut() = StatusCode::NOT_FOUND;
+                return Ok(res);
+            };
+            if let Err(err) = ret {
+                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                set_res_body(&mut res, err.to_string());
+            }
+            return Ok(res);
         }
 
-        let mut should_print = is_match_title(&self.filters, &format!("{method} {url}"));
+        let mut recorder = Recorder::new(&req_uri, method.as_str());
+
+        recorder.control_dump(is_match_title(&self.filters, &format!("{method} {url}")));
 
         if method == Method::CONNECT {
-            let recorder = if should_print && !self.no_filter {
-                Some(Recorder::new(path.clone(), method.clone()))
-            } else {
-                None
-            };
+            recorder.control_dump(!self.filters.is_empty() || !self.mime_filters.is_empty());
             return self.handle_connect(req, recorder);
         }
 
-        let mut recorder = Recorder::new(path.clone(), method.clone());
-
-        recorder = recorder.set_req_headers(req_headers.clone());
+        recorder.set_req_headers(&req_headers);
 
         let req_body = match req.collect().await {
             Ok(v) => v.to_bytes(),
             Err(err) => {
-                internal_server_error(&mut res, err, should_print, recorder);
+                self.internal_server_error(&mut res, err, recorder);
                 return Ok(res);
             }
         };
 
-        recorder = recorder.set_req_body(req_body.clone());
+        recorder.set_req_body(req_body.clone());
 
         let mut builder = hyper::Request::builder().uri(&url).method(method.clone());
         for (key, value) in req_headers.iter() {
@@ -122,7 +145,7 @@ impl Server {
         let proxy_req = match builder.body(Full::new(req_body)) {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err, should_print, recorder);
+                self.internal_server_error(&mut res, err, recorder);
                 return Ok(res);
             }
         };
@@ -145,7 +168,7 @@ impl Server {
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                internal_server_error(&mut res, err, should_print, recorder);
+                self.internal_server_error(&mut res, err, recorder);
                 return Ok(res);
             }
         };
@@ -153,14 +176,12 @@ impl Server {
         let proxy_res_status = proxy_res.status();
         let proxy_res_headers = proxy_res.headers().clone();
 
-        if should_print {
-            if let Some(header_value) = proxy_res_headers
-                .get(CONTENT_TYPE)
-                .and_then(|v| v.to_str().ok())
-            {
-                should_print = is_match_type(&self.mime_filters, header_value)
-            }
-        };
+        if let Some(header_value) = proxy_res_headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+        {
+            recorder.control_dump(is_match_type(&self.mime_filters, header_value));
+        }
 
         *res.status_mut() = proxy_res_status;
         let mut encoding = "";
@@ -176,55 +197,44 @@ impl Server {
         let proxy_res_body = match proxy_res.collect().await {
             Ok(v) => v.to_bytes(),
             Err(err) => {
-                internal_server_error(&mut res, err, should_print, recorder);
+                self.internal_server_error(&mut res, err, recorder);
                 return Ok(res);
             }
         };
 
-        if should_print {
-            recorder = recorder
-                .set_res_status(proxy_res_status)
-                .set_res_headers(proxy_res_headers.clone());
+        recorder
+            .set_res_status(proxy_res_status)
+            .set_res_headers(&proxy_res_headers);
 
-            if !proxy_res_body.is_empty() {
-                let decompress_body = decompress(&proxy_res_body, encoding)
-                    .await
-                    .unwrap_or_else(|| proxy_res_body.to_vec());
-                recorder = recorder.set_res_body(Bytes::from(decompress_body));
-            }
-            recorder.print();
+        if !proxy_res_body.is_empty() {
+            let decompress_body = decompress(&proxy_res_body, encoding)
+                .await
+                .unwrap_or_else(|| proxy_res_body.to_vec());
+            recorder.set_res_body(Bytes::from(decompress_body));
         }
 
-        *res.body_mut() = Full::new(proxy_res_body).boxed();
+        self.take_recorder(recorder);
+
+        *res.body_mut() = Full::new(proxy_res_body)
+            .map_err(|err| anyhow!("{err}"))
+            .boxed();
 
         Ok(res)
     }
 
     async fn handle_cert_site(self: Arc<Self>, res: &mut Response, path: &str) -> Result<()> {
         if path.is_empty() {
-            let body = Bytes::from_static(CERT_SITE_INDEX);
-            let body_size = body.len();
-            *res.body_mut() = Full::new(body).boxed();
+            set_res_body(res, CERT_SITE_INDEX.to_string());
             res.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static("text/html; charset=UTF-8"),
             );
-            res.headers_mut().insert(
-                CONTENT_LENGTH,
-                HeaderValue::from_str(&body_size.to_string())?,
-            );
         } else if path == "proxyfor-ca-cert.cer" || path == "proxyfor-ca-cert.pem" {
             let body = self.ca.ca_cert_pem();
-            let body = Bytes::from(body);
-            let body_size = body.len();
-            *res.body_mut() = Full::new(body).boxed();
+            set_res_body(res, body);
             res.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static("application/x-x509-ca-cert"),
-            );
-            res.headers_mut().insert(
-                CONTENT_LENGTH,
-                HeaderValue::from_str(&body_size.to_string())?,
             );
             res.headers_mut().insert(
                 CONTENT_DISPOSITION,
@@ -236,12 +246,73 @@ impl Server {
         Ok(())
     }
 
+    async fn handle_webui_index(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+        set_res_body(res, WEBUI_INDEX.to_string());
+        res.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("text/html; charset=UTF-8"),
+        );
+        Ok(())
+    }
+
+    async fn handle_subscribe_traffic(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+        let (init_data, receiver) = (self.state.list(), self.state.subscribe());
+        let stream = BroadcastStream::new(receiver);
+        let stream = stream
+            .map_ok(|head| subscribe_json_frame(&head))
+            .map_err(|err| anyhow!("{err}"));
+        let body = if init_data.is_empty() {
+            BodyExt::boxed(StreamBody::new(stream))
+        } else {
+            let init_stream = stream::iter(
+                init_data
+                    .into_iter()
+                    .map(|head| Ok(subscribe_json_frame(&head))),
+            );
+            let combined_stream = init_stream.chain(stream);
+            BodyExt::boxed(StreamBody::new(combined_stream))
+        };
+        *res.body_mut() = body;
+        res.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(())
+    }
+
+    async fn handle_list_traffis(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+        set_res_body(res, serde_json::to_string_pretty(&self.state.list())?);
+        res.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/json; charset=UTF-8"),
+        );
+        res.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(())
+    }
+
+    async fn handle_traffic_info(self: &Arc<Self>, res: &mut Response, id: &str) -> Result<()> {
+        match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
+            Some(traffic) => {
+                set_res_body(res, serde_json::to_string_pretty(&traffic)?);
+                res.headers_mut().insert(
+                    CONTENT_TYPE,
+                    HeaderValue::from_static("application/json; charset=UTF-8"),
+                );
+                res.headers_mut()
+                    .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+            }
+            None => {
+                *res.status_mut() = StatusCode::NOT_FOUND;
+            }
+        }
+        Ok(())
+    }
+
     fn handle_connect(
         self: Arc<Self>,
         mut req: Request,
-        mut recorder: Option<Recorder>,
+        recorder: Recorder,
     ) -> Result<Response, hyper::Error> {
-        let mut res = Response::new(BoxBody::new(Empty::new()));
+        let mut res = Response::default();
         let authority = match req.uri().authority().cloned() {
             Some(authority) => authority,
             None => {
@@ -250,20 +321,17 @@ impl Server {
             }
         };
         let fut = async move {
+            let mut recorder = ErrorRecorder::new(recorder);
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
-                    let mut record_error = |err: String| {
-                        if let Some(recorder) = recorder.take() {
-                            recorder.set_error(err).print()
-                        }
-                    };
                     let mut upgraded = TokioIo::new(upgraded);
 
                     let mut buffer = [0; 4];
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
                         Err(e) => {
-                            record_error(format!("Failed to read from upgraded connection: {e}"));
+                            recorder
+                                .add_error(format!("Failed to read from upgraded connection: {e}"));
                             return;
                         }
                     };
@@ -278,13 +346,13 @@ impl Server {
                             .serve_connect_stream(upgraded, Scheme::HTTP, authority)
                             .await
                         {
-                            record_error(format!("Websocket connect error: {e}"));
+                            recorder.add_error(format!("Websocket connect error: {e}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let server_config = match self.ca.gen_server_config(&authority).await {
                             Ok(server_config) => server_config,
                             Err(e) => {
-                                record_error(format!("Failed to build server config: {e}"));
+                                recorder.add_error(format!("Failed to build server config: {e}"));
                                 return;
                             }
                         };
@@ -292,7 +360,8 @@ impl Server {
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
                             Err(e) => {
-                                record_error(format!("Failed to establish TLS Connection: {e}"));
+                                recorder
+                                    .add_error(format!("Failed to establish TLS Connection: {e}"));
                                 return;
                             }
                         };
@@ -302,11 +371,11 @@ impl Server {
                             .await
                         {
                             if !e.to_string().starts_with("error shutting down connection") {
-                                record_error(format!("HTTPS connect error: {e}"));
+                                recorder.add_error(format!("HTTPS connect error: {e}"));
                             }
                         }
                     } else {
-                        record_error(format!(
+                        recorder.add_error(format!(
                             "Unknown protocol, read '{:02X?}' from upgraded connection",
                             &buffer[..bytes_read]
                         ));
@@ -314,7 +383,8 @@ impl Server {
                         let mut server = match TcpStream::connect(authority.as_str()).await {
                             Ok(server) => server,
                             Err(e) => {
-                                record_error(format! {"Failed to connect to {authority}: {e}"});
+                                recorder
+                                    .add_error(format! {"Failed to connect to {authority}: {e}"});
                                 return;
                             }
                         };
@@ -322,7 +392,7 @@ impl Server {
                         if let Err(e) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
-                            record_error(format!(
+                            recorder.add_error(format!(
                                 "Failed to tunnel unknown protocol to {}: {}",
                                 authority, e
                             ));
@@ -330,15 +400,13 @@ impl Server {
                     }
                 }
                 Err(e) => {
-                    if let Some(recorder) = recorder.take() {
-                        recorder.set_error(format!("Upgrade error: {e}")).print();
-                    }
+                    recorder.add_error(format!("Upgrade error: {e}"));
                 }
             };
         };
 
         tokio::spawn(fut);
-        Ok(Response::new(BoxBody::new(Empty::new())))
+        Ok(Response::default())
     }
 
     async fn serve_connect_stream<I>(
@@ -372,18 +440,38 @@ impl Server {
             .serve_connection_with_upgrades(TokioIo::new(stream), service)
             .await
     }
+
+    fn take_recorder(self: Arc<Self>, recorder: Recorder) {
+        recorder.print();
+        self.state.add_trafic(recorder.take_traffic())
+    }
+
+    fn internal_server_error<T: std::fmt::Display>(
+        self: Arc<Self>,
+        res: &mut Response,
+        error: T,
+        mut recorder: Recorder,
+    ) {
+        recorder.add_error(error.to_string());
+        self.take_recorder(recorder);
+        *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    }
 }
 
-fn internal_server_error<T: Display>(
-    res: &mut Response,
-    err: T,
-    should_print: bool,
-    recorder: Recorder,
-) {
-    if should_print {
-        recorder.set_error(err.to_string()).print();
+fn set_res_body(res: &mut Response, body: String) {
+    let body = Bytes::from(body);
+    if let Ok(header_value) = HeaderValue::from_str(&body.len().to_string()) {
+        res.headers_mut().insert(CONTENT_LENGTH, header_value);
     }
-    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+    *res.body_mut() = Full::new(body).map_err(|err| anyhow!("{err}")).boxed();
+}
+
+fn subscribe_json_frame<T: Serialize>(head: &T) -> Frame<Bytes> {
+    let data = match serde_json::to_string(head) {
+        Ok(data) => format!("{data}\n"),
+        Err(_) => String::new(),
+    };
+    Frame::data(Bytes::from(data))
 }
 
 async fn decompress(data: &Bytes, encoding: &str) -> Option<Vec<u8>> {
