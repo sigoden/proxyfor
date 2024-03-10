@@ -1,13 +1,9 @@
-use std::borrow::Cow;
-
-use anyhow::Result;
+use anyhow::{bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use bytes::Bytes;
 use http::{HeaderMap, StatusCode, Version};
 use indexmap::IndexMap;
-use serde::{Serialize, Serializer};
-
-const HEX_VIEW_SIZE: usize = 320;
+use serde::Serialize;
+use serde_json::json;
 
 #[derive(Debug)]
 pub struct Recorder {
@@ -19,18 +15,22 @@ pub struct Recorder {
 pub struct Traffic {
     uri: String,
     method: String,
-    version: Option<String>,
+    http_version: Option<String>,
     req_headers: Option<Headers>,
-    #[serde(serialize_with = "serialize_optional_bytes")]
-    req_body: Option<Bytes>,
+    req_body: Option<Body>,
     status: Option<u16>,
     res_headers: Option<Headers>,
-    #[serde(serialize_with = "serialize_optional_bytes")]
-    res_body: Option<Bytes>,
+    res_body: Option<Body>,
     error: Option<String>,
 }
 
 pub type Headers = IndexMap<String, String>;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Body {
+    encode: String,
+    value: String,
+}
 
 impl Recorder {
     pub fn new(uri: &str, method: &str) -> Self {
@@ -41,8 +41,8 @@ impl Recorder {
         }
     }
 
-    pub fn set_version(&mut self, version: &Version) -> &mut Self {
-        self.traffic.version = Some(format!("{version:?}"));
+    pub fn set_http_version(&mut self, http_version: &Version) -> &mut Self {
+        self.traffic.http_version = Some(format!("{http_version:?}"));
         self
     }
 
@@ -51,11 +51,11 @@ impl Recorder {
         self
     }
 
-    pub fn set_req_body(&mut self, body: Bytes) -> &mut Self {
+    pub fn set_req_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
-            self.traffic.req_body = Some(body);
+            self.traffic.req_body = Some(Body::new(body));
             self
         }
     }
@@ -70,11 +70,11 @@ impl Recorder {
         self
     }
 
-    pub fn set_res_body(&mut self, body: Bytes) -> &mut Self {
+    pub fn set_res_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
-            self.traffic.res_body = Some(body);
+            self.traffic.res_body = Some(Body::new(body));
             self
         }
     }
@@ -105,7 +105,7 @@ impl Traffic {
         Self {
             uri: uri.to_string(),
             method: method.to_string(),
-            version: None,
+            http_version: None,
             req_headers: None,
             req_body: None,
             status: None,
@@ -157,6 +157,88 @@ impl Traffic {
         }
         lines.join("\n\n")
     }
+
+    pub fn to_har(&self) -> String {
+        // har_cookies
+        // har_qs
+        // har_body
+        let value = json!({
+            "version": "1.2",
+            "log": {
+                "entries": [
+                    {
+                        "request": {
+                            "method": self.method,
+                            "url": self.uri,
+                            "httpVersion": self.http_version,
+                            "headers": har_headers(&self.req_headers),
+                        },
+                        "response": {
+
+                        }
+                    }
+                ]
+            }
+        });
+        value.to_string()
+    }
+
+    pub fn to_curl(&self) -> String {
+        let mut output = format!("curl {}", self.uri);
+        let escape_single_quote = |v: &str| v.replace('\'', r#"'\''"#);
+        if self.method != "GET" {
+            output.push_str(&format!(" \\\n  -X {}", self.method));
+        }
+        for (key, value) in self.req_headers.iter().flatten() {
+            if key != "content-length" {
+                output.push_str(&format!(
+                    " \\\n  -H '{}: {}'",
+                    key,
+                    escape_single_quote(value)
+                ))
+            }
+        }
+        if let Some(body) = &self.req_body {
+            if body.is_utf8() {
+                output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
+            } else {
+                output.push_str(" \\\n  --data-binary @-");
+                output = format!(
+                    "echo {} | \\\n  base64 --decode | \\\n  {}",
+                    body.value, output
+                );
+            }
+        }
+        output
+    }
+
+    pub fn export<'a>(&'a self, format: &str) -> Result<(String, &'a str)> {
+        match format {
+            "markdown" => Ok((self.to_markdown(), "text/markdown; charset=UTF-8")),
+            "har" => Ok((self.to_har(), "application/json; charset=UTF-8")),
+            "curl" => Ok((self.to_curl(), "text/plain; charset=UTF-8")),
+            _ => bail!("unsupported format: {}", format),
+        }
+    }
+}
+
+impl Body {
+    pub fn new(bytes: &[u8]) -> Self {
+        match std::str::from_utf8(bytes) {
+            Ok(value) => Body {
+                encode: "utf8".to_string(),
+                value: value.to_string(),
+            },
+            Err(_) => Body {
+                encode: "base64".to_string(),
+                value: STANDARD.encode(bytes),
+            },
+        }
+    }
+
+    pub fn is_utf8(&self) -> bool {
+        self.encode == "utf8"
+    }
 }
 
 #[derive(Debug)]
@@ -195,15 +277,26 @@ fn render_header(title: &str, headers: &Headers) -> String {
     )
 }
 
-fn render_body(title: &str, body: &Bytes, headers: &Option<Headers>) -> String {
-    let (body, is_utf8) = render_bytes(body);
-    let lang = recognize_lang(is_utf8, headers);
-    format!(
-        r#"{title}
+fn render_body(title: &str, body: &Body, headers: &Option<Headers>) -> String {
+    let content_type = extract_content_type(headers).unwrap_or_default();
+    if body.is_utf8() {
+        let body_value = &body.value;
+        let lang = md_lang(content_type);
+        format!(
+            r#"{title}
 ```{lang}
-{body}
+{body_value}
 ```"#
-    )
+        )
+    } else {
+        let body_value = &body.value;
+        format!(
+            r#"{title}
+```
+data:{content_type};base64,{body_value}
+```"#
+        )
+    }
 }
 
 fn render_error(error: &str) -> String {
@@ -220,31 +313,24 @@ fn render_error(error: &str) -> String {
     }
 }
 
-fn render_bytes(data: &[u8]) -> (String, bool) {
-    if let Ok(value) = std::str::from_utf8(data) {
-        (value.to_string(), true)
-    } else if data.len() > HEX_VIEW_SIZE * 2 {
-        let value = format!(
-            "{}\n......\n{}",
-            hexplay::HexView::new(&data[0..HEX_VIEW_SIZE]),
-            hexplay::HexView::new(&data[data.len() - HEX_VIEW_SIZE..])
-        );
-        (value, false)
-    } else {
-        let value = hexplay::HexView::new(data).to_string();
-        (value, false)
+fn har_headers(headers: &Option<Headers>) -> serde_json::Value {
+    match headers {
+        Some(headers) => headers
+            .iter()
+            .map(|(key, value)| json!({ "name": key, "value": value }))
+            .collect(),
+        None => json!([]),
     }
 }
 
-fn recognize_lang(is_utf8: bool, headers: &Option<Headers>) -> &str {
-    if !is_utf8 {
-        return "";
-    }
+fn extract_content_type(headers: &Option<Headers>) -> Option<&str> {
     headers
         .as_ref()
         .and_then(|v| v.get("content-type"))
-        .map(|v| md_lang(v))
-        .unwrap_or_default()
+        .map(|v| match v.split_once(';') {
+            Some((v, _)) => v.trim(),
+            None => v.as_str(),
+        })
 }
 
 fn md_lang(content_type: &str) -> &str {
@@ -278,34 +364,6 @@ fn convert_headers(headers: &HeaderMap) -> IndexMap<String, String> {
         .collect()
 }
 
-fn serialize_optional_bytes<S>(value: &Option<Bytes>, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match value {
-        Some(bytes) => {
-            let bytes = match std::str::from_utf8(bytes) {
-                Ok(value) => SerBytes {
-                    encode: "utf8",
-                    value: Cow::Borrowed(value),
-                },
-                Err(_) => SerBytes {
-                    encode: "base64",
-                    value: Cow::Owned(STANDARD.encode(bytes)),
-                },
-            };
-            serializer.serialize_some(&bytes)
-        }
-        None => serializer.serialize_none(),
-    }
-}
-
-#[derive(Serialize)]
-struct SerBytes<'a> {
-    encode: &'a str,
-    value: Cow<'a, str>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,19 +384,19 @@ mod tests {
 
     #[test]
     fn test_render_markdown() {
-        let mut render = Recorder::new("http://example.com/", Method::GET.as_str());
+        let mut render = Recorder::new("http://example.com/", Method::PUT.as_str());
         render
             .set_req_headers(&create_headers(&[("content-type", "plain/text")]))
-            .set_req_body(Bytes::from("req_body"))
+            .set_req_body("req_body".as_bytes())
             .set_res_status(StatusCode::OK)
             .set_res_headers(&create_headers(&[(
                 "content-type",
                 "application/json; charset=utf-8",
             )]))
-            .set_res_body(Bytes::from(r#"{"message":"OK"}"#))
+            .set_res_body(r#"{"message":"OK"}"#.as_bytes())
             .add_error("error".to_string());
         let expect = r#"
-# GET http://example.com/
+# PUT http://example.com/
 
 REQUEST HEADERS
 ```
@@ -364,6 +422,20 @@ RESPONSE BODY
 
 ERROR: error"#;
         assert_eq!(expect, render.traffic.to_markdown());
+    }
+
+    #[test]
+    fn test_render_curl() {
+        let mut render = Recorder::new("http://example.com/", Method::PUT.as_str());
+        render
+            .set_req_headers(&create_headers(&[("content-type", "plain/text")]))
+            .set_req_body("req_body".as_bytes());
+
+        let expect = r#"curl http://example.com/ \
+  -X PUT \
+  -H 'content-type: plain/text' \
+  -d 'req_body'"#;
+        assert_eq!(expect, render.traffic.to_curl());
     }
 
     #[test]

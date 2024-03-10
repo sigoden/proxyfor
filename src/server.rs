@@ -106,7 +106,8 @@ impl Server {
             } else if path == "/traffics" {
                 self.handle_list_traffics(&mut res).await
             } else if let Some(id) = path.strip_prefix("/traffic/") {
-                self.handle_get_traffic(&mut res, id).await
+                let query = req.uri().query().unwrap_or_default();
+                self.handle_get_traffic(&mut res, id, query).await
             } else {
                 *res.status_mut() = StatusCode::NOT_FOUND;
                 return Ok(res);
@@ -120,7 +121,7 @@ impl Server {
 
         let version = req.version();
         let mut recorder = Recorder::new(&req_uri, method.as_str());
-        recorder.set_version(&version);
+        recorder.set_http_version(&version);
 
         recorder.control_dump(is_match_title(&self.filters, &format!("{method} {url}")));
 
@@ -139,7 +140,7 @@ impl Server {
             }
         };
 
-        recorder.set_req_body(req_body.clone());
+        recorder.set_req_body(&req_body);
 
         let mut builder = hyper::Request::builder().uri(&url).method(method.clone());
         for (key, value) in req_headers.iter() {
@@ -217,7 +218,7 @@ impl Server {
             let decompress_body = decompress(&proxy_res_body, encoding)
                 .await
                 .unwrap_or_else(|| proxy_res_body.to_vec());
-            recorder.set_res_body(Bytes::from(decompress_body));
+            recorder.set_res_body(&decompress_body);
         }
 
         self.take_recorder(recorder);
@@ -299,14 +300,29 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_get_traffic(self: &Arc<Self>, res: &mut Response, id: &str) -> Result<()> {
+    async fn handle_get_traffic(
+        self: &Arc<Self>,
+        res: &mut Response,
+        id: &str,
+        query: &str,
+    ) -> Result<()> {
         match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
             Some(traffic) => {
-                set_res_body(res, serde_json::to_string_pretty(&traffic)?);
-                res.headers_mut().insert(
-                    CONTENT_TYPE,
-                    HeaderValue::from_static("application/json; charset=UTF-8"),
-                );
+                match query {
+                    "markdown" | "curl" | "har" | "res-body" => {
+                        let (data, mime) = traffic.export(query)?;
+                        set_res_body(res, data);
+                        res.headers_mut()
+                            .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
+                    }
+                    _ => {
+                        set_res_body(res, serde_json::to_string_pretty(&traffic)?);
+                        res.headers_mut().insert(
+                            CONTENT_TYPE,
+                            HeaderValue::from_static("application/json; charset=UTF-8"),
+                        );
+                    }
+                }
                 res.headers_mut()
                     .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             }

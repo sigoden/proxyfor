@@ -58,6 +58,48 @@
             border-bottom-color: white;
         }
 
+        .toolbox {
+            margin-left: auto;
+        }
+
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropbtn {
+            padding: 8px;
+            border: none;
+            cursor: pointer;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            cursor: pointer;
+            background-color: white;
+            right: 0;
+            box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+            z-index: 1;
+        }
+
+        .dropdown-content a {
+            display: block;
+            text-decoration: none;
+            padding: 3px 10px;
+            clear: both;
+            font-weight: 400;
+            line-height: 1.42857143;
+            color: #333;
+            white-space: nowrap;
+        }
+
+        .dropdown-content a:hover {
+            color: #262626;
+            text-decoration: none;
+            background-color: #f5f5f5;
+        }
+
         .traffic-table {
             width: 100%;
             table-layout: fixed;
@@ -163,6 +205,7 @@
         }
     </style>
     <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+    <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
 </head>
 
 <body>
@@ -184,10 +227,49 @@
             <div data-tab="req" class="tab active">Request</div>
             <div data-tab="res" class="tab">Response</div>
             <div data-tab="err" class="tab hidden">Error</div>
+            <div class="toolbox">
+                <div class="dropdown copy-dropdown">
+                    <button class="dropbtn">Copy▾</button>
+                    <div class="dropdown-content">
+                        <a data-kind="markdown">Copy as Markdown</a>
+                        <a data-kind="curl">Copy as cURL</a>
+                        <a data-kind="har">Copy as HAR</a>
+                        <a data-kind="res-body">Copy Response</a>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="traffic-view"></div>
     </div>
     <script>
+
+        /**
+         * @typedef {Object} Traffic
+         * @property {string} uri
+         * @property {string} method
+         * @property {?string} http_version
+         * @property {?Headers} req_headers
+         * @property {?BodyData} req_body
+         * @property {?number} status
+         * @property {?Headers} res_headers
+         * @property {?BodyData} res_body
+         * @property {?string} error
+         */
+
+        /**
+         * @typedef {Object.<string, string>} Headers
+         */
+
+        /**
+         * @typedef {Object} BodyData
+         * @property {"utf8"|"base64"} encode 
+         * @property {string} value
+         */
+
+        /**
+         * @typedef {"markdown"|"curl"|"har"|"res-body"} CopyKind
+         */
+
         const STATUS_CODES = {
             100: "Continue",
             101: "Switching Protocols",
@@ -259,6 +341,16 @@
         const $trafficView = document.querySelector(".traffic-view");
 
         /**
+         * @type {HTMLButtonElement}
+         */
+        const $copyDropbtn = document.querySelector(".copy-dropdown .dropbtn");
+
+        /**
+         * @type {HTMLDivElement}
+         */
+        const $copyDropdownContent = document.querySelector(".copy-dropdown .dropdown-content");
+
+        /**
          * @type {number}
          */
         let selectedTrafficId = null;
@@ -267,29 +359,6 @@
          * @type {"req" | "res"}
          */
         let selectedTab = "req"
-
-        /**
-         * @typedef {Object} Traffic
-         * @property {string} uri
-         * @property {string} method
-         * @property {?string} version
-         * @property {?Headers} req_headers
-         * @property {?BodyData} req_body
-         * @property {?number} status
-         * @property {?Headers} res_headers
-         * @property {?BodyData} res_body
-         * @property {?string} error
-         */
-
-        /**
-         * @typedef {Object.<string, string>} Headers
-         */
-
-        /**
-         * @typedef {Object} BodyData
-         * @property {"utf8"|"base64"} encode 
-         * @property {string} value
-         */
 
         /**
          * @type {Traffic}
@@ -339,6 +408,17 @@
                     if (tab) handleSelectedTab(tab, true);
                 }
             });
+            $copyDropbtn.addEventListener("click", (e) => {
+                $copyDropdownContent.style.display = "block";
+            });
+            $copyDropdownContent.addEventListener("click", (e) => {
+                $copyDropdownContent.style.display = "none";
+                const $kind = e.target.closest("[data-kind]");
+                if ($kind) {
+                    const kind = $kind.getAttribute("data-kind");
+                    if (kind) handleCopy(kind);
+                }
+            });
         }
 
         function handleSelectTraffic(id) {
@@ -379,6 +459,39 @@
         function handleNewTraffic(traffic) {
             const { id, uri, method, status } = traffic;
             $trafficTableBody.insertAdjacentHTML("beforeend", tmplTrafficTableRow(id, uri, method, status));
+        }
+
+        /**
+         * @param {CopyKind} kind
+         */
+        function handleCopy(kind) {
+            if (!currentTraffic) {
+                return;
+            }
+            if (kind == "res-body") {
+                if (currentTraffic.res_body) {
+                    let text = ""
+                    if (currentTraffic.res_body.encode == "base64") {
+                        let contentType = currentTraffic.res_headers["content-type"];
+                        text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
+                    } else {
+                        text = currentTraffic.res_body.value;
+                    }
+                    if (text) {
+                        ClipboardJS.copy(text);
+                    }
+                }
+            } else {
+                fetch(getTrafficEndpoint(selectedTrafficId) + `?${kind}`)
+                    .then(res => res.text())
+                    .then(text => {
+                        ClipboardJS.copy(text);
+                    })
+                    .catch(err => {
+                        console.error(`Failed to copy traffic ${selectedTrafficId}`, err);
+                    })
+
+            }
         }
 
         function updateTabContent() {
@@ -437,7 +550,7 @@
          */
         function tmplTrafficRes(traffic) {
             return [
-                `<div class="firstline">${[traffic.version, traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
+                `<div class="firstline">${[traffic.http_version, traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
                 tmplHaders(traffic.res_headers),
                 tmplBody(traffic.res_body, traffic.res_headers),
             ].join("");
@@ -464,7 +577,7 @@
                 let language = highlightLanguage(contentType);
                 const highlightedCode = hljs.getLanguage(language)
                     ? hljs.highlight(value, { language }).value
-                    : hljs.highlightAuto(value).value; 
+                    : hljs.highlightAuto(value).value;
                 return `<div class="code-view"><pre><code>${highlightedCode}</code></pre></div>`;
             }
             if (encode == "base64") {
