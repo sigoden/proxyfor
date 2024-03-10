@@ -57,7 +57,7 @@ $ curl http://127.0.0.1:8080/ip
 
 Proxyfor provides a web-based user interface that allows you to interactively inspect the HTTP traffic. All traffic is kept in memory, which means that it’s intended for small-ish samples.
 
-![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/b0eb46da-8e6f-4e96-86a4-64cd623bd608)
+![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/a88b5a11-5191-4b4d-ac61-5ff2e7a70a88)
 
 ## Command Line
 

@@ -53,7 +53,7 @@ async fn main() -> Result<()> {
     });
     let handle = run(server, ip, port).await?;
     let running = Arc::new(AtomicBool::new(true));
-    eprintln!("Listening on {}:{}", ip, port);
+    eprintln!("HTTP(S) proxy listening at {}:{}", ip, port);
     eprintln!(
         "Web inteface accessible at http://{}:{}{}/",
         ip, port, WEB_PREFIX

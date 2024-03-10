@@ -250,17 +250,19 @@
          * @property {string} uri
          * @property {string} method
          * @property {?string} req_version
-         * @property {?Headers} req_headers
+         * @property {?Header[]} req_headers
          * @property {?BodyData} req_body
          * @property {?number} status
-         * @property {?Headers} res_headers
+         * @property {?Header[]} res_headers
          * @property {?string} res_version
          * @property {?BodyData} res_body
          * @property {?string} error
          */
 
         /**
-         * @typedef {Object.<string, string>} Headers
+         * @typedef {Object} Header
+         * @property {string} name
+         * @property {string} value
          */
 
         /**
@@ -475,7 +477,7 @@
                 if (currentTraffic.res_body) {
                     let text = ""
                     if (currentTraffic.res_body.encode == "base64") {
-                        let contentType = currentTraffic.res_headers["content-type"];
+                        let contentType = getContentType(currentTraffic.res_headers);
                         text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
                     } else {
                         text = currentTraffic.res_body.value;
@@ -560,22 +562,22 @@
         }
 
         /**
-         * @param {Headers} headers
+         * @param {?Header[]} headers
          */
         function tmplHaders(headers) {
-            return Object.entries(headers || {}).map(([key, value]) =>
-                `<div class="header-line"><span class="header-key">${key}</span>:&nbsp;<span class="header-value">${value}</span></div>`
+            return (headers || []).map(({name, value}) =>
+                `<div class="header-line"><span class="header-key">${name}</span>:&nbsp;<span class="header-value">${value}</span></div>`
             ).join("");
         }
 
         /**
          * @param {BodyData} body
-         * @param {?Headers} headers
+         * @param {?Header[]} headers
          */
         function tmplBody(body, headers) {
             if (!body) return "";
             let { encode, value } = body;
-            let contentType = ((headers || {})["content-type"] || "").split(';')[0].trim();
+            let contentType = getContentType(headers);
             if (encode == "utf8") {
                 let language = highlightLanguage(contentType);
                 const highlightedCode = hljs.getLanguage(language)
@@ -594,7 +596,7 @@
                     return `<div class="media-view"><video controls style="max-width: 100%;"><source src="data:${contentType};base64,${value}" type="${contentType}"></video></div>`;
                 } else {
                     let filename = "download.bin";
-                    let disposition = ((headers || {})["content-disposition"] || "");
+                    let disposition = getHeader(headers, "content-disposition")
                     if (/filename="([^"]+?)"/.test(disposition)) {
                         filename = disposition.match(/filename="(.*?)"/)[1] || filename;
                     }
@@ -608,6 +610,20 @@
         function tmplError(error) {
             if (!error) return "";
             return `<div class="error-view">${error}</div>`
+        }
+
+        /**
+         * @param {?Header[]} headers
+         */
+        function getContentType(headers) {
+            return getHeader(headers, "content-type").split(';')[0].trim();
+        }
+
+        /**
+         * @param {?Header[]} headers
+         */
+        function getHeader(headers, name) {
+            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || ""
         }
 
         /** 

@@ -1,9 +1,10 @@
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{HeaderMap, StatusCode, Version};
-use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::{json, Value};
+
+const HEX_VIEW_SIZE: usize = 320;
 
 #[derive(Debug)]
 pub struct Recorder {
@@ -25,7 +26,13 @@ pub struct Traffic {
     error: Option<String>,
 }
 
-pub type Headers = IndexMap<String, String>;
+pub type Headers = Vec<Header>;
+
+#[derive(Debug, Clone, Serialize)]
+pub struct Header {
+    name: String,
+    value: String,
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Body {
@@ -104,7 +111,7 @@ impl Recorder {
     }
 
     pub fn print(&self) {
-        println!("{}", self.traffic.to_markdown());
+        println!("{}", self.traffic.to_markdown(true));
     }
 }
 
@@ -137,7 +144,7 @@ impl Traffic {
         (&self.method, &self.uri, self.status)
     }
 
-    pub fn to_markdown(&self) -> String {
+    pub fn to_markdown(&self, print: bool) -> String {
         let mut lines: Vec<String> = vec![];
         lines.push(format!("\n# {} {}", self.method, self.uri));
 
@@ -146,7 +153,7 @@ impl Traffic {
         }
 
         if let Some(body) = &self.req_body {
-            lines.push(render_body("REQUEST BODY", body, &self.req_headers));
+            lines.push(render_body("REQUEST BODY", body, &self.req_headers, print));
         }
 
         if let Some(status) = &self.status {
@@ -158,7 +165,7 @@ impl Traffic {
         }
 
         if let Some(body) = &self.res_body {
-            lines.push(render_body("RESPONSE BODY", body, &self.res_headers));
+            lines.push(render_body("RESPONSE BODY", body, &self.res_headers, print));
         }
 
         if let Some(error) = &self.error {
@@ -218,12 +225,12 @@ impl Traffic {
         if self.method != "GET" {
             output.push_str(&format!(" \\\n  -X {}", self.method));
         }
-        for (key, value) in self.req_headers.iter().flatten() {
-            if key != "content-length" {
+        for header in self.req_headers.iter().flatten() {
+            if header.name != "content-length" {
                 output.push_str(&format!(
                     " \\\n  -H '{}: {}'",
-                    key,
-                    escape_single_quote(value)
+                    header.name,
+                    escape_single_quote(&header.value)
                 ))
             }
         }
@@ -243,7 +250,7 @@ impl Traffic {
 
     pub fn export<'a>(&'a self, format: &str) -> Result<(String, &'a str)> {
         match format {
-            "markdown" => Ok((self.to_markdown(), "text/markdown; charset=UTF-8")),
+            "markdown" => Ok((self.to_markdown(false), "text/markdown; charset=UTF-8")),
             "har" => Ok((
                 serde_json::to_string_pretty(&self.to_har())?,
                 "application/json; charset=UTF-8",
@@ -300,7 +307,7 @@ impl Drop for ErrorRecorder {
 fn render_header(title: &str, headers: &Headers) -> String {
     let value = headers
         .iter()
-        .map(|(key, value)| format!("{key}: {value}"))
+        .map(|header| format!("{}: {}", header.name, header.value))
         .collect::<Vec<String>>()
         .join("\n");
     format!(
@@ -311,7 +318,7 @@ fn render_header(title: &str, headers: &Headers) -> String {
     )
 }
 
-fn render_body(title: &str, body: &Body, headers: &Option<Headers>) -> String {
+fn render_body(title: &str, body: &Body, headers: &Option<Headers>, print: bool) -> String {
     let content_type = extract_content_type(headers).unwrap_or_default();
     if body.is_utf8() {
         let body_value = &body.value;
@@ -320,6 +327,27 @@ fn render_body(title: &str, body: &Body, headers: &Option<Headers>) -> String {
             r#"{title}
 ```{lang}
 {body_value}
+```"#
+        )
+    } else if print {
+        let Ok(bytes) = STANDARD.decode(&body.value) else {
+            return String::new();
+        };
+        let body_bytes = if bytes.len() > HEX_VIEW_SIZE * 2 {
+            let dots = "⋅".repeat(67);
+            format!(
+                "{}\n{}\n{}",
+                render_bytes(&bytes[0..HEX_VIEW_SIZE]),
+                dots,
+                render_bytes(&bytes[bytes.len() - HEX_VIEW_SIZE..]),
+            )
+        } else {
+            render_bytes(&bytes).to_string()
+        };
+        format!(
+            r#"{title}
+```
+{body_bytes}
 ```"#
         )
     } else {
@@ -347,12 +375,19 @@ fn render_error(error: &str) -> String {
     }
 }
 
+fn render_bytes(source: &[u8]) -> String {
+    let config = pretty_hex::HexConfig {
+        title: false,
+        chunk: 2,
+        ..Default::default()
+    };
+
+    pretty_hex::config_hex(&source, config)
+}
+
 fn har_headers(headers: &Option<Headers>) -> Value {
     match headers {
-        Some(headers) => headers
-            .iter()
-            .map(|(key, value)| json!({ "name": key, "value": value }))
-            .collect(),
+        Some(headers) => headers.iter().map(|header| json!(header)).collect(),
         None => json!([]),
     }
 }
@@ -372,8 +407,14 @@ fn har_req_cookies(headers: &Option<Headers>) -> Value {
     match headers {
         Some(headers) => headers
             .iter()
-            .filter(|(key, _)| key.as_str() == "cookie")
-            .flat_map(|(_, value)| value.split(';').map(|v| v.trim()).collect::<Vec<&str>>())
+            .filter(|header| header.name == "cookie")
+            .flat_map(|header| {
+                header
+                    .value
+                    .split(';')
+                    .map(|v| v.trim())
+                    .collect::<Vec<&str>>()
+            })
             .filter_map(|value| {
                 value
                     .split_once('=')
@@ -402,9 +443,9 @@ fn har_res_cookies(headers: &Option<Headers>) -> Value {
     match headers {
         Some(headers) => headers
             .iter()
-            .filter(|(key, _)| key.as_str() == "set-cookie")
-            .filter_map(|(_, value)| {
-                cookie::Cookie::parse(value).ok().map(|cookie| {
+            .filter(|header| header.name.as_str() == "set-cookie")
+            .filter_map(|header| {
+                cookie::Cookie::parse(&header.value).ok().map(|cookie| {
                     let mut json_cookie =
                         json!({ "name": cookie.name(), "value": cookie.value(), });
                     if let Some(value) = cookie.path() {
@@ -442,9 +483,11 @@ fn extract_content_type(headers: &Option<Headers>) -> Option<&str> {
 }
 
 fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a str> {
-    headers
-        .as_ref()
-        .and_then(|v| v.get(key).map(|v| v.as_str()))
+    headers.as_ref().and_then(|v| {
+        v.iter()
+            .find(|header| header.name == key)
+            .map(|header| header.value.as_str())
+    })
 }
 
 fn md_lang(content_type: &str) -> &str {
@@ -462,14 +505,12 @@ fn md_lang(content_type: &str) -> &str {
     }
 }
 
-fn convert_headers(headers: &HeaderMap) -> IndexMap<String, String> {
+fn convert_headers(headers: &HeaderMap) -> Headers {
     headers
         .iter()
-        .map(|(key, value)| {
-            (
-                key.as_str().to_string(),
-                value.to_str().unwrap_or_default().to_string(),
-            )
+        .map(|(key, value)| Header {
+            name: key.as_str().to_string(),
+            value: value.to_str().unwrap_or_default().to_string(),
         })
         .collect()
 }
@@ -481,10 +522,36 @@ mod tests {
     use http::{HeaderName, HeaderValue, Method};
     use pretty_assertions::assert_eq;
 
+    fn create_recorder1() -> Recorder {
+        let mut recorder = Recorder::new("http://example.com/?q1=3", Method::PUT.as_str());
+        recorder
+            .set_req_headers(&create_headers(&[
+                ("content-type", "plain/text"),
+                ("cookie", "c1=1; c2=2"),
+                ("cookie", "c3=3"),
+            ]))
+            .set_req_body("req_body".as_bytes())
+            .set_res_status(StatusCode::OK)
+            .set_res_headers(&create_headers(&[
+                ("content-type", "application/json; charset=utf-8"),
+                (
+                    "set-cookie",
+                    "sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
+                ),
+                (
+                    "set-cookie",
+                    "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
+                ),
+            ]))
+            .set_res_body(r#"{"message":"OK"}"#.as_bytes())
+            .add_error("error".to_string());
+        recorder
+    }
+
     fn create_headers(list: &[(&'static str, &'static str)]) -> HeaderMap {
         let mut headers = HeaderMap::new();
         for (key, value) in list {
-            headers.insert(
+            headers.append(
                 HeaderName::from_static(key),
                 HeaderValue::from_static(value),
             );
@@ -494,23 +561,15 @@ mod tests {
 
     #[test]
     fn test_render_markdown() {
-        let mut render = Recorder::new("http://example.com/", Method::PUT.as_str());
-        render
-            .set_req_headers(&create_headers(&[("content-type", "plain/text")]))
-            .set_req_body("req_body".as_bytes())
-            .set_res_status(StatusCode::OK)
-            .set_res_headers(&create_headers(&[(
-                "content-type",
-                "application/json; charset=utf-8",
-            )]))
-            .set_res_body(r#"{"message":"OK"}"#.as_bytes())
-            .add_error("error".to_string());
+        let recorder = create_recorder1();
         let expect = r#"
-# PUT http://example.com/
+# PUT http://example.com/?q1=3
 
 REQUEST HEADERS
 ```
 content-type: plain/text
+cookie: c1=1; c2=2
+cookie: c3=3
 ```
 
 REQUEST BODY
@@ -523,6 +582,8 @@ RESPONSE STATUS: 200
 RESPONSE HEADERS
 ```
 content-type: application/json; charset=utf-8
+set-cookie: sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
+set-cookie: sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
 ```
 
 RESPONSE BODY
@@ -531,21 +592,174 @@ RESPONSE BODY
 ```
 
 ERROR: error"#;
-        assert_eq!(expect, render.traffic.to_markdown());
+        assert_eq!(expect, recorder.traffic.to_markdown(false));
     }
 
     #[test]
     fn test_render_curl() {
-        let mut render = Recorder::new("http://example.com/", Method::PUT.as_str());
-        render
-            .set_req_headers(&create_headers(&[("content-type", "plain/text")]))
-            .set_req_body("req_body".as_bytes());
-
-        let expect = r#"curl http://example.com/ \
+        let recorder = create_recorder1();
+        let expect = r#"curl http://example.com/?q1=3 \
   -X PUT \
   -H 'content-type: plain/text' \
+  -H 'cookie: c1=1; c2=2' \
+  -H 'cookie: c3=3' \
   -d 'req_body'"#;
-        assert_eq!(expect, render.traffic.to_curl());
+        assert_eq!(expect, recorder.traffic.to_curl());
+    }
+
+    #[test]
+    fn test_render_har() {
+        let recorder = create_recorder1();
+        let expect = r#"{
+  "log": {
+    "version": "1.2",
+    "creator": {
+      "name": "proxyfor",
+      "version": "0.2.0",
+      "comment": ""
+    },
+    "pages": [],
+    "entries": [
+      {
+        "request": {
+          "method": "PUT",
+          "url": "http://example.com/?q1=3",
+          "httpVersion": null,
+          "cookies": [
+            {
+              "name": "c1",
+              "value": "1"
+            },
+            {
+              "name": "c2",
+              "value": "2"
+            },
+            {
+              "name": "c3",
+              "value": "3"
+            }
+          ],
+          "headers": [
+            {
+              "name": "content-type",
+              "value": "plain/text"
+            },
+            {
+              "name": "cookie",
+              "value": "c1=1; c2=2"
+            },
+            {
+              "name": "cookie",
+              "value": "c3=3"
+            }
+          ],
+          "queryString": [
+            {
+              "name": "q1",
+              "value": "3"
+            }
+          ],
+          "postData": {
+            "mimeType": "plain/text",
+            "text": "req_body"
+          },
+          "headersSize": -1,
+          "bodySize": -1
+        },
+        "response": {
+          "status": 200,
+          "statusText": "",
+          "httpVersion": null,
+          "cookies": [
+            {
+              "name": "sc1",
+              "value": "1",
+              "path": "/",
+              "domain": "example.com",
+              "expries": "2015-10-21T07:28:00Z"
+            },
+            {
+              "name": "sc2",
+              "value": "2",
+              "path": "/",
+              "domain": "example.com",
+              "expries": "2015-10-21T07:28:00Z"
+            }
+          ],
+          "headers": [
+            {
+              "name": "content-type",
+              "value": "application/json; charset=utf-8"
+            },
+            {
+              "name": "set-cookie",
+              "value": "sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT"
+            },
+            {
+              "name": "set-cookie",
+              "value": "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT"
+            }
+          ],
+          "content": {
+            "mimeType": "application/json; charset=utf-8",
+            "text": "{\"message\":\"OK\"}"
+          },
+          "redirectURL": "",
+          "headersSize": -1,
+          "bodySize": -1
+        }
+      }
+    ]
+  }
+}"#;
+        assert_eq!(
+            expect,
+            serde_json::to_string_pretty(&recorder.traffic.to_har()).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_render_body() {
+        let body = Body::new(&[
+            0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
+            0x0f, 0x83,
+        ]);
+        let output = render_body(
+            "REQUEST BODY",
+            &body,
+            &Some(vec![Header {
+                name: "content-type".into(),
+                value: "application/octet-stream".into(),
+            }]),
+            false,
+        );
+        let expect = r#"REQUEST BODY
+```
+data:application/octet-stream;base64,a04aw68D0h5+c7rIvYQPgw==
+```"#;
+        assert_eq!(expect, output);
+    }
+
+    #[test]
+    fn test_render_body_print() {
+        let body = Body::new(&[
+            0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
+            0x0f, 0x83,
+        ]);
+        let output = render_body(
+            "REQUEST BODY",
+            &body,
+            &Some(vec![Header {
+                name: "content-type".into(),
+                value: "plain/text".into(),
+            }]),
+            true,
+        );
+        let expect = r#"REQUEST BODY
+```
+0000:   6b4e 1ac3 af03 d21e  7e73 bac8 bd84 0f83   kN......~s......
+```"#;
+        assert_eq!(expect, output);
     }
 
     #[test]
