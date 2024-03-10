@@ -119,14 +119,13 @@ impl Server {
             return Ok(res);
         }
 
-        let version = req.version();
         let mut recorder = Recorder::new(&req_uri, method.as_str());
-        recorder.set_http_version(&version);
+        recorder.set_req_version(&req.version());
 
-        recorder.control_dump(is_match_title(&self.filters, &format!("{method} {url}")));
+        recorder.check_match(is_match_title(&self.filters, &format!("{method} {url}")));
 
         if method == Method::CONNECT {
-            recorder.control_dump(!self.filters.is_empty() || !self.mime_filters.is_empty());
+            recorder.check_match(!self.filters.is_empty() || !self.mime_filters.is_empty());
             return self.handle_connect(req, recorder);
         }
 
@@ -188,7 +187,7 @@ impl Server {
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
         {
-            recorder.control_dump(is_match_type(&self.mime_filters, header_value));
+            recorder.check_match(is_match_type(&self.mime_filters, header_value));
         }
 
         *res.status_mut() = proxy_res_status;
@@ -202,6 +201,11 @@ impl Server {
             res.headers_mut().insert(key.clone(), value.clone());
         }
 
+        recorder
+            .set_res_status(proxy_res_status)
+            .set_res_version(&proxy_res.version())
+            .set_res_headers(&proxy_res_headers);
+
         let proxy_res_body = match proxy_res.collect().await {
             Ok(v) => v.to_bytes(),
             Err(err) => {
@@ -209,10 +213,6 @@ impl Server {
                 return Ok(res);
             }
         };
-
-        recorder
-            .set_res_status(proxy_res_status)
-            .set_res_headers(&proxy_res_headers);
 
         if !proxy_res_body.is_empty() {
             let decompress_body = decompress(&proxy_res_body, encoding)
@@ -468,8 +468,10 @@ impl Server {
     }
 
     fn take_recorder(self: Arc<Self>, recorder: Recorder) {
-        recorder.print();
-        self.state.add_traffic(recorder.take_traffic())
+        if recorder.is_valid() {
+            recorder.print();
+            self.state.add_traffic(recorder.take_traffic())
+        }
     }
 
     fn internal_server_error<T: std::fmt::Display>(

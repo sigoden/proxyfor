@@ -3,23 +3,24 @@ use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{HeaderMap, StatusCode, Version};
 use indexmap::IndexMap;
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[derive(Debug)]
 pub struct Recorder {
     traffic: Traffic,
-    should_dump: bool,
+    valid: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Traffic {
     uri: String,
     method: String,
-    http_version: Option<String>,
+    req_version: Option<String>,
     req_headers: Option<Headers>,
     req_body: Option<Body>,
     status: Option<u16>,
     res_headers: Option<Headers>,
+    res_version: Option<String>,
     res_body: Option<Body>,
     error: Option<String>,
 }
@@ -37,12 +38,12 @@ impl Recorder {
         let traffic = Traffic::new(uri, method);
         Self {
             traffic,
-            should_dump: true,
+            valid: true,
         }
     }
 
-    pub fn set_http_version(&mut self, http_version: &Version) -> &mut Self {
-        self.traffic.http_version = Some(format!("{http_version:?}"));
+    pub fn set_req_version(&mut self, http_version: &Version) -> &mut Self {
+        self.traffic.req_version = Some(format!("{http_version:?}"));
         self
     }
 
@@ -65,6 +66,11 @@ impl Recorder {
         self
     }
 
+    pub fn set_res_version(&mut self, http_version: &Version) -> &mut Self {
+        self.traffic.res_version = Some(format!("{http_version:?}"));
+        self
+    }
+
     pub fn set_res_headers(&mut self, headers: &HeaderMap) -> &mut Self {
         self.traffic.res_headers = Some(convert_headers(headers));
         self
@@ -84,9 +90,13 @@ impl Recorder {
         self
     }
 
-    pub fn control_dump(&mut self, should_dump: bool) -> &mut Self {
-        self.should_dump = self.should_dump && should_dump;
+    pub fn check_match(&mut self, is_match: bool) -> &mut Self {
+        self.valid = self.valid && is_match;
         self
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid
     }
 
     pub fn take_traffic(self) -> Traffic {
@@ -94,9 +104,7 @@ impl Recorder {
     }
 
     pub fn print(&self) {
-        if self.should_dump {
-            println!("{}", self.traffic.to_markdown());
-        }
+        println!("{}", self.traffic.to_markdown());
     }
 }
 
@@ -105,10 +113,11 @@ impl Traffic {
         Self {
             uri: uri.to_string(),
             method: method.to_string(),
-            http_version: None,
+            req_version: None,
             req_headers: None,
             req_body: None,
             status: None,
+            res_version: None,
             res_headers: None,
             res_body: None,
             error: None,
@@ -158,29 +167,49 @@ impl Traffic {
         lines.join("\n\n")
     }
 
-    pub fn to_har(&self) -> String {
-        // har_cookies
-        // har_qs
-        // har_body
-        let value = json!({
-            "version": "1.2",
+    pub fn to_har(&self) -> Value {
+        let request = json!({
+            "method": self.method,
+            "url": self.uri,
+            "httpVersion": self.req_version,
+            "cookies": har_req_cookies(&self.req_headers),
+            "headers": har_headers(&self.req_headers),
+            "queryString": har_query_string(&self.uri),
+            "postData": har_body(&self.req_body, &self.req_headers),
+            "headersSize": -1,
+            "bodySize": -1,
+        });
+        let response = match self.status {
+            Some(status) => json!({
+                "status": status,
+                "statusText": "",
+                "httpVersion": self.res_version,
+                "cookies": har_res_cookies(&self.res_headers),
+                "headers": har_headers(&self.res_headers),
+                "content": har_body(&self.res_body, &self.res_headers),
+                "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
+                "headersSize": -1,
+                "bodySize": -1,
+            }),
+            None => json!({}),
+        };
+        json!({
             "log": {
+                "version": "1.2",
+                "creator": {
+                    "name": "proxyfor",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "comment": "",
+                },
+                "pages": [],
                 "entries": [
                     {
-                        "request": {
-                            "method": self.method,
-                            "url": self.uri,
-                            "httpVersion": self.http_version,
-                            "headers": har_headers(&self.req_headers),
-                        },
-                        "response": {
-
-                        }
+                        "request": request,
+                        "response": response
                     }
                 ]
             }
-        });
-        value.to_string()
+        })
     }
 
     pub fn to_curl(&self) -> String {
@@ -215,7 +244,10 @@ impl Traffic {
     pub fn export<'a>(&'a self, format: &str) -> Result<(String, &'a str)> {
         match format {
             "markdown" => Ok((self.to_markdown(), "text/markdown; charset=UTF-8")),
-            "har" => Ok((self.to_har(), "application/json; charset=UTF-8")),
+            "har" => Ok((
+                serde_json::to_string_pretty(&self.to_har())?,
+                "application/json; charset=UTF-8",
+            )),
             "curl" => Ok((self.to_curl(), "text/plain; charset=UTF-8")),
             _ => bail!("unsupported format: {}", format),
         }
@@ -259,7 +291,9 @@ impl ErrorRecorder {
 
 impl Drop for ErrorRecorder {
     fn drop(&mut self) {
-        self.recorder.print();
+        if self.recorder.is_valid() {
+            self.recorder.print();
+        }
     }
 }
 
@@ -313,7 +347,7 @@ fn render_error(error: &str) -> String {
     }
 }
 
-fn har_headers(headers: &Option<Headers>) -> serde_json::Value {
+fn har_headers(headers: &Option<Headers>) -> Value {
     match headers {
         Some(headers) => headers
             .iter()
@@ -323,21 +357,97 @@ fn har_headers(headers: &Option<Headers>) -> serde_json::Value {
     }
 }
 
+fn har_query_string(url: &str) -> Value {
+    match url::Url::parse(url) {
+        Ok(url) => url
+            .query_pairs()
+            .into_iter()
+            .map(|(k, v)| json!({ "name": &k, "value": &v }))
+            .collect(),
+        Err(_) => json!([]),
+    }
+}
+
+fn har_req_cookies(headers: &Option<Headers>) -> Value {
+    match headers {
+        Some(headers) => headers
+            .iter()
+            .filter(|(key, _)| key.as_str() == "cookie")
+            .flat_map(|(_, value)| value.split(';').map(|v| v.trim()).collect::<Vec<&str>>())
+            .filter_map(|value| {
+                value
+                    .split_once('=')
+                    .map(|(k, v)| json!({ "name": k, "value": v }))
+            })
+            .collect(),
+        None => json!([]),
+    }
+}
+
+fn har_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
+    let content_type = get_header_value(headers, "content-type").unwrap_or_default();
+    match body {
+        Some(body) => {
+            let mut value = json!({"mimeType": content_type, "text": body.value});
+            if !body.is_utf8() {
+                value["encoding"] = "base64".into();
+            }
+            value
+        }
+        None => json!({"mimeType": content_type, "text":""}),
+    }
+}
+
+fn har_res_cookies(headers: &Option<Headers>) -> Value {
+    match headers {
+        Some(headers) => headers
+            .iter()
+            .filter(|(key, _)| key.as_str() == "set-cookie")
+            .filter_map(|(_, value)| {
+                cookie::Cookie::parse(value).ok().map(|cookie| {
+                    let mut json_cookie =
+                        json!({ "name": cookie.name(), "value": cookie.value(), });
+                    if let Some(value) = cookie.path() {
+                        json_cookie["path"] = value.into();
+                    }
+                    if let Some(value) = cookie.domain() {
+                        json_cookie["domain"] = value.into();
+                    }
+                    if let Some(cookie::Expiration::DateTime(datetime)) = cookie.expires() {
+                        if let Ok(datetime) =
+                            datetime.format(&time::format_description::well_known::Rfc3339)
+                        {
+                            json_cookie["expries"] = datetime.into();
+                        }
+                    }
+                    if let Some(value) = cookie.http_only() {
+                        json_cookie["httpOnly"] = value.into();
+                    }
+                    if let Some(value) = cookie.secure() {
+                        json_cookie["secure"] = value.into();
+                    }
+                    json_cookie
+                })
+            })
+            .collect(),
+        None => json!([]),
+    }
+}
+
 fn extract_content_type(headers: &Option<Headers>) -> Option<&str> {
+    get_header_value(headers, "content-type").map(|v| match v.split_once(';') {
+        Some((v, _)) => v.trim(),
+        None => v,
+    })
+}
+
+fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a str> {
     headers
         .as_ref()
-        .and_then(|v| v.get("content-type"))
-        .map(|v| match v.split_once(';') {
-            Some((v, _)) => v.trim(),
-            None => v.as_str(),
-        })
+        .and_then(|v| v.get(key).map(|v| v.as_str()))
 }
 
 fn md_lang(content_type: &str) -> &str {
-    let content_type = match content_type.split_once(';') {
-        Some((v, _)) => v.trim(),
-        None => content_type,
-    };
     if let Some(value) = content_type
         .strip_prefix("text/")
         .or_else(|| content_type.strip_prefix("application/"))

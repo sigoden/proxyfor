@@ -151,6 +151,7 @@
             border: 1px solid #ccc;
             border-top: none;
             padding: 10px;
+            overflow-wrap: break-word;
         }
 
         .firstline {
@@ -167,6 +168,7 @@
         .header-line {
             margin-bottom: 0.3em;
             max-height: 12.4ex;
+            overflow-y: auto;
         }
 
         .header-key {
@@ -234,7 +236,7 @@
                         <a data-kind="markdown">Copy as Markdown</a>
                         <a data-kind="curl">Copy as cURL</a>
                         <a data-kind="har">Copy as HAR</a>
-                        <a data-kind="res-body">Copy Response</a>
+                        <a data-kind="res-body">Copy Response Body</a>
                     </div>
                 </div>
             </div>
@@ -247,11 +249,12 @@
          * @typedef {Object} Traffic
          * @property {string} uri
          * @property {string} method
-         * @property {?string} http_version
+         * @property {?string} req_version
          * @property {?Headers} req_headers
          * @property {?BodyData} req_body
          * @property {?number} status
          * @property {?Headers} res_headers
+         * @property {?string} res_version
          * @property {?BodyData} res_body
          * @property {?string} error
          */
@@ -539,7 +542,7 @@
          */
         function tmplTrafficReq(traffic) {
             return [
-                `<div class="firstline">${traffic.method} ${traffic.uri}</div>`,
+                `<div class="firstline">${traffic.method} ${traffic.uri} ${traffic.req_version || ""}</div>`,
                 tmplHaders(traffic.req_headers),
                 tmplBody(traffic.req_body, traffic.req_headers),
             ].join("");
@@ -550,7 +553,7 @@
          */
         function tmplTrafficRes(traffic) {
             return [
-                `<div class="firstline">${[traffic.http_version, traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
+                `<div class="firstline">${[traffic.res_version || "", traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
                 tmplHaders(traffic.res_headers),
                 tmplBody(traffic.res_body, traffic.res_headers),
             ].join("");
@@ -561,7 +564,7 @@
          */
         function tmplHaders(headers) {
             return Object.entries(headers || {}).map(([key, value]) =>
-                `<div class="header-line"><span class="header-key">${key}</span>: <span class="header-value">${value}</span></div>`
+                `<div class="header-line"><span class="header-key">${key}</span>:&nbsp;<span class="header-value">${value}</span></div>`
             ).join("");
         }
 
