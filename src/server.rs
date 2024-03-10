@@ -120,7 +120,9 @@ impl Server {
         }
 
         let mut recorder = Recorder::new(&req_uri, method.as_str());
-        recorder.set_req_version(&req.version());
+
+        let req_version = req.version();
+        recorder.set_req_version(&req_version);
 
         recorder.check_match(is_match_title(&self.filters, &format!("{method} {url}")));
 
@@ -141,7 +143,10 @@ impl Server {
 
         recorder.set_req_body(&req_body);
 
-        let mut builder = hyper::Request::builder().uri(&url).method(method.clone());
+        let mut builder = hyper::Request::builder()
+            .uri(&url)
+            .method(method.clone())
+            .version(req_version);
         for (key, value) in req_headers.iter() {
             if key == HOST {
                 continue;
@@ -164,7 +169,7 @@ impl Server {
                     HttpsConnectorBuilder::new()
                         .with_webpki_roots()
                         .https_only()
-                        .enable_http1()
+                        .enable_all_versions()
                         .build(),
                 )
                 .request(proxy_req)
