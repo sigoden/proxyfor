@@ -11,7 +11,10 @@ use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder
 use bytes::Bytes;
 use futures_util::{stream, StreamExt, TryStreamExt};
 use http::{
-    header::{CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE},
+    header::{
+        CACHE_CONTROL, CONNECTION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
+        PROXY_AUTHORIZATION,
+    },
     uri::{Authority, Scheme},
     HeaderValue,
 };
@@ -148,7 +151,7 @@ impl Server {
             .method(method.clone())
             .version(req_version);
         for (key, value) in req_headers.iter() {
-            if key == HOST {
+            if matches!(key, &HOST | &CONNECTION | &PROXY_AUTHORIZATION) {
                 continue;
             }
             builder = builder.header(key.clone(), value.clone());
