@@ -1,220 +1,194 @@
-use bytes::Bytes;
-use http::{HeaderMap, Method, StatusCode};
+use crate::traffic::{Body, Header, Headers, Traffic};
 
-const HEX_VIEW_SIZE: usize = 320;
+use http::{HeaderMap, StatusCode, Version};
 
 #[derive(Debug)]
 pub(crate) struct Recorder {
-    path: String,
-    method: Method,
-    req_headers: Option<HeaderMap>,
-    req_body: Option<Bytes>,
-    res_status: Option<StatusCode>,
-    res_headers: Option<HeaderMap>,
-    res_body: Option<Bytes>,
-    error: Option<String>,
+    traffic: Traffic,
+    valid: bool,
+    print_mode: PrintMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrintMode {
+    Oneline,
+    Markdown,
 }
 
 impl Recorder {
-    pub fn new(path: String, method: Method) -> Self {
+    pub(crate) fn new(uri: &str, method: &str) -> Self {
+        let traffic = Traffic::new(uri, method);
         Self {
-            path,
-            method,
-            req_headers: None,
-            req_body: None,
-            res_status: None,
-            res_headers: None,
-            res_body: None,
-            error: None,
+            traffic,
+            valid: true,
+            print_mode: PrintMode::Markdown,
         }
     }
 
-    // Remove the unused functions
-    pub fn set_req_headers(mut self, headers: HeaderMap) -> Self {
-        self.req_headers = Some(headers);
+    pub(crate) fn set_req_version(&mut self, http_version: &Version) -> &mut Self {
+        self.traffic.req_version = Some(format!("{http_version:?}"));
         self
     }
 
-    pub fn set_req_body(mut self, body: Bytes) -> Self {
+    pub(crate) fn set_req_headers(&mut self, headers: &HeaderMap) -> &mut Self {
+        self.traffic.req_headers = Some(convert_headers(headers));
+        self
+    }
+
+    pub(crate) fn set_req_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
-            self.req_body = Some(body);
+            self.traffic.req_body = Some(Body::new(body));
             self
         }
     }
 
-    pub fn set_res_status(mut self, status: StatusCode) -> Self {
-        self.res_status = Some(status);
+    pub(crate) fn set_res_status(&mut self, status: StatusCode) -> &mut Self {
+        self.traffic.status = Some(status.into());
         self
     }
 
-    pub fn set_res_headers(mut self, headers: HeaderMap) -> Self {
-        self.res_headers = Some(headers);
+    pub(crate) fn set_res_version(&mut self, http_version: &Version) -> &mut Self {
+        self.traffic.res_version = Some(format!("{http_version:?}"));
         self
     }
 
-    pub fn set_res_body(mut self, body: Bytes) -> Self {
+    pub(crate) fn set_res_headers(&mut self, headers: &HeaderMap) -> &mut Self {
+        self.traffic.res_headers = Some(convert_headers(headers));
+        self
+    }
+
+    pub(crate) fn set_res_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
-            self.res_body = Some(body);
+            self.traffic.res_body = Some(Body::new(body));
             self
         }
     }
 
-    pub fn set_error(mut self, error: String) -> Self {
-        self.error = Some(error);
+    pub(crate) fn add_error(&mut self, error: String) -> &mut Self {
+        self.traffic.add_error(error);
         self
     }
 
-    pub fn render(&self) -> String {
-        let mut lines: Vec<String> = vec![];
-        lines.push(format!("\n# {} {}", self.method, self.path));
-
-        if let Some(headers) = &self.req_headers {
-            lines.push(render_header("REQUEST HEADERS", headers));
-        }
-
-        if let Some(body) = &self.req_body {
-            lines.push(render_body("REQUEST BODY", body, &self.req_headers));
-        }
-
-        if let Some(status) = &self.res_status {
-            lines.push(format!("RESPONSE STATUS: {status}"));
-        }
-
-        if let Some(headers) = &self.res_headers {
-            lines.push(render_header("RESPONSE HEADERS", headers));
-        }
-
-        if let Some(body) = &self.res_body {
-            lines.push(render_body("RESPONSE BODY", body, &self.res_headers));
-        }
-
-        if let Some(error) = &self.error {
-            lines.push(render_error(error));
-        }
-        lines.join("\n\n")
+    pub(crate) fn check_match(&mut self, is_match: bool) -> &mut Self {
+        self.valid = self.valid && is_match;
+        self
     }
 
-    pub fn print(&self) {
-        println!("{}", self.render());
+    pub(crate) fn change_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
+        self.print_mode = print_mode;
+        self
+    }
+
+    pub(crate) fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    pub(crate) fn take_traffic(self) -> Traffic {
+        self.traffic
+    }
+
+    pub(crate) fn print(&self) {
+        match self.print_mode {
+            PrintMode::Oneline => {
+                println!("# {}", self.traffic.oneline());
+            }
+            PrintMode::Markdown => {
+                println!("{}", self.traffic.markdown(true));
+            }
+        }
     }
 }
 
-fn render_header(title: &str, headers: &HeaderMap) -> String {
-    let value = headers
-        .iter()
-        .map(|(key, value)| format!("{key}: {}", value.to_str().unwrap_or_default()))
-        .collect::<Vec<String>>()
-        .join("\n");
-    format!(
-        r#"{title}
-```
-{value}
-```"#
-    )
+#[derive(Debug)]
+pub(crate) struct ErrorRecorder {
+    recorder: Recorder,
 }
 
-fn render_body(title: &str, body: &Bytes, headers: &Option<HeaderMap>) -> String {
-    let (body, is_utf8) = render_bytes(body);
-    let lang = recognize_lang(is_utf8, headers);
-    format!(
-        r#"{title}
-```{lang}
-{body}
-```"#
-    )
-}
+impl ErrorRecorder {
+    pub(crate) fn new(recorder: Recorder) -> Self {
+        Self { recorder }
+    }
 
-fn render_error(error: &str) -> String {
-    if error.contains('\n') {
-        format!(
-            r#"ERROR
-```
-{}
-```"#,
-            error
-        )
-    } else {
-        format!("ERROR: {}", error)
+    pub(crate) fn add_error(&mut self, error: String) -> &mut Self {
+        self.recorder.add_error(error);
+        self
     }
 }
 
-fn render_bytes(data: &[u8]) -> (String, bool) {
-    if let Ok(value) = std::str::from_utf8(data) {
-        (value.to_string(), true)
-    } else if data.len() > HEX_VIEW_SIZE * 2 {
-        let value = format!(
-            "{}\n......\n{}",
-            hexplay::HexView::new(&data[0..HEX_VIEW_SIZE]),
-            hexplay::HexView::new(&data[data.len() - HEX_VIEW_SIZE..])
-        );
-        (value, false)
-    } else {
-        let value = hexplay::HexView::new(data).to_string();
-        (value, false)
+impl Drop for ErrorRecorder {
+    fn drop(&mut self) {
+        if self.recorder.is_valid() {
+            self.recorder.print();
+        }
     }
 }
 
-fn recognize_lang(is_utf8: bool, headers: &Option<HeaderMap>) -> &str {
-    if !is_utf8 {
-        return "";
-    }
+fn convert_headers(headers: &HeaderMap) -> Headers {
     headers
-        .as_ref()
-        .and_then(|v| v.get("content-type"))
-        .and_then(|v| v.to_str().ok())
-        .map(md_lang)
-        .unwrap_or_default()
-}
-
-fn md_lang(content_type: &str) -> &str {
-    let content_type = match content_type.split_once(';') {
-        Some((v, _)) => v.trim(),
-        None => content_type,
-    };
-    if let Some(value) = content_type
-        .strip_prefix("text/")
-        .or_else(|| content_type.strip_prefix("application/"))
-    {
-        if let Some(value) = value.strip_prefix("x-") {
-            value
-        } else {
-            value
-        }
-    } else {
-        ""
-    }
+        .iter()
+        .map(|(key, value)| Header::new(key.as_str(), value.to_str().unwrap_or_default()))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use http::{header::CONTENT_TYPE, HeaderValue};
+    use http::{HeaderName, HeaderValue, Method};
     use pretty_assertions::assert_eq;
 
-    #[test]
-    fn test_render() {
-        let mut req_readers = HeaderMap::new();
-        req_readers.insert(CONTENT_TYPE, HeaderValue::from_static("plain/text"));
-        let mut res_headers = HeaderMap::new();
-        res_headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        let render = Recorder::new("http://example.com/".to_string(), Method::GET)
-            .set_req_headers(req_readers)
-            .set_req_body(Bytes::from("req_body"))
+    fn create_recorder1() -> Recorder {
+        let mut recorder = Recorder::new("http://example.com/?q1=3", Method::PUT.as_str());
+        recorder
+            .set_req_headers(&create_headers(&[
+                ("content-type", "plain/text"),
+                ("cookie", "c1=1; c2=2"),
+                ("cookie", "c3=3"),
+            ]))
+            .set_req_body("req_body".as_bytes())
             .set_res_status(StatusCode::OK)
-            .set_res_headers(res_headers)
-            .set_res_body(Bytes::from(r#"{"message":"OK"}"#))
-            .set_error("error".to_string());
+            .set_res_headers(&create_headers(&[
+                ("content-type", "application/json; charset=utf-8"),
+                (
+                    "set-cookie",
+                    "sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
+                ),
+                (
+                    "set-cookie",
+                    "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
+                ),
+            ]))
+            .set_res_body(r#"{"message":"OK"}"#.as_bytes())
+            .add_error("error".to_string());
+        recorder
+    }
+
+    fn create_headers(list: &[(&'static str, &'static str)]) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        for (key, value) in list {
+            headers.append(
+                HeaderName::from_static(key),
+                HeaderValue::from_static(value),
+            );
+        }
+        headers
+    }
+
+    #[test]
+    fn test_recorder() {
+        let recorder = create_recorder1();
         let expect = r#"
-# GET http://example.com/
+# PUT http://example.com/?q1=3 200
 
 REQUEST HEADERS
 ```
 content-type: plain/text
+cookie: c1=1; c2=2
+cookie: c3=3
 ```
 
 REQUEST BODY
@@ -222,11 +196,11 @@ REQUEST BODY
 req_body
 ```
 
-RESPONSE STATUS: 200 OK
-
 RESPONSE HEADERS
 ```
-content-type: application/json
+content-type: application/json; charset=utf-8
+set-cookie: sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
+set-cookie: sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
 ```
 
 RESPONSE BODY
@@ -235,16 +209,6 @@ RESPONSE BODY
 ```
 
 ERROR: error"#;
-        assert_eq!(expect, render.render());
-    }
-
-    #[test]
-    fn test_md_lang() {
-        assert_eq!(md_lang("application/json"), "json");
-        assert_eq!(md_lang("application/xml"), "xml");
-        assert_eq!(md_lang("application/octet-stream"), "octet-stream");
-        assert_eq!(md_lang("application/javascript"), "javascript");
-        assert_eq!(md_lang("text/x-rust"), "rust");
-        assert_eq!(md_lang("text/css"), "css");
+        assert_eq!(recorder.traffic.markdown(true), expect);
     }
 }

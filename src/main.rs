@@ -4,8 +4,15 @@ mod filter;
 mod recorder;
 mod rewind;
 mod server;
+mod state;
+mod traffic;
 
-use crate::{certificate_authority::load_ca, cli::Cli, filter::parse_filters, server::Server};
+use crate::{
+    certificate_authority::load_ca,
+    cli::Cli,
+    filter::parse_filters,
+    server::{Server, WEB_PREFIX},
+};
 
 use anyhow::{anyhow, Result};
 use clap::Parser;
@@ -37,18 +44,24 @@ async fn main() -> Result<()> {
     });
     let filters = parse_filters(&cli.filters)?;
     let mime_filters: Vec<String> = cli.mime_filters.iter().map(|v| v.to_lowercase()).collect();
-    let no_filter = filters.is_empty() && mime_filters.is_empty();
     let server = Arc::new(Server {
         reverse_proxy_url,
         ca,
-        no_filter,
         filters,
         mime_filters,
+        state: state::State::new(),
+        web: cli.web,
         running: running.clone(),
     });
     let handle = run(server, ip, port).await?;
     let running = Arc::new(AtomicBool::new(true));
-    eprintln!("Listening on {}:{}", ip, port);
+    eprintln!("HTTP(S) proxy listening at {}:{}", ip, port);
+    if cli.web {
+        eprintln!(
+            "Web inteface accessible at http://{}:{}{}/",
+            ip, port, WEB_PREFIX
+        );
+    }
     tokio::select! {
         ret = handle => {
             if let Err(e) = ret {
@@ -86,16 +99,9 @@ where
     let hyper_service =
         service_fn(move |request: hyper::Request<Incoming>| handle.clone().handle(request));
 
-    let ret = Builder::new(TokioExecutor::new())
+    let _ = Builder::new(TokioExecutor::new())
         .serve_connection_with_upgrades(stream, hyper_service)
         .await;
-
-    if let Err(err) = ret {
-        match err.downcast_ref::<std::io::Error>() {
-            Some(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => {}
-            _ => eprintln!("Serving connection {}", err),
-        }
-    }
 }
 
 fn parse_addr(value: &str) -> Option<(IpAddr, u16)> {

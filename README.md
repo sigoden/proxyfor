@@ -1,4 +1,4 @@
-# proxyfor
+# Proxyfor
 
 [![CI](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml/badge.svg)](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml)
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
@@ -10,8 +10,9 @@ A simple and portable proxy for capturing HTTP and HTTPS traffic.
 - Support forward proxy
 - Support reverse proxy
 - Support filtering
-- Log traffic to markdown
-- Hosted self-signed CA certificate site
+- Integrate web inteface
+- Integrate certificates installation webapp
+- Export in Markdown, cURL, or HAR formats
 
 ## Installation
 
@@ -52,7 +53,13 @@ $ curl http://127.0.0.1:8080/ip
 
 ![reverse-proxy](https://github.com/sigoden/proxyfor/assets/4012553/789ad353-9fe3-4bff-9f47-f19fd8dc5ce6)
 
-# CLI
+## Web Interface
+
+Proxyfor provides a web-based user interface that allows you to interactively inspect the HTTP traffic. All traffic is kept in memory, which means that it’s intended for small-ish samples.
+
+![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/a88b5a11-5191-4b4d-ac61-5ff2e7a70a88)
+
+## Command Line
 
 ```
 Usage: proxyfor [OPTIONS] [URL]
@@ -64,6 +71,7 @@ Options:
   -l, --listen <ADDR>         Listening ip and port address [default: 0.0.0.0:8080]
   -f, --filters <REGEX>       Only inspect http(s) traffic whose `{method} {uri}` matches the regex
   -m, --mime-filters <VALUE>  Only inspect http(s) traffic whose content-type matches the value
+  -w, --web                   Enable web interface
   -h, --help                  Print help
   -V, --version               Print version
 ```
@@ -74,6 +82,12 @@ Change the ip and port.
 proxyfor -l 18080
 proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:18080
+```
+
+Enable web inteface with `-w/--web`
+
+```sh
+proxyfor --web
 ```
 
 Use `-f/--filters` to filter traffic by matching `{method} {uri}`.
@@ -96,15 +110,9 @@ Pipe it to a markdown file, then view the captured traffic using your favorite e
 proxyfor > proxyfor.md
 ```
 
-Use grep to dump title only
-
-```sh
-proxyfor | grep '^# [A-Z]'
-```
-
 ## Certificates
 
-proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts proxyfor’s built-in certificate authority. Usually this means that the proxyfor CA certificate has to be installed on the client device.
+Proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts proxyfor’s built-in certificate authority. Usually this means that the proxyfor CA certificate has to be installed on the client device.
 
 By far the easiest way to [install the proxyfor CA certificate](./assets/install-certificate.md) is to use the built-in certificate installation app.
 To do this, start proxyfor and configure your target device with the correct proxy settings.
@@ -116,6 +124,6 @@ Now start a browser on the device, and visit the magic domain [proxyfor.local](h
 
 Copyright (c) 2024-∞ proxyfor-developers.
 
-proxyfor is made available under the terms of either the MIT License or the Apache License 2.0, at your option.
+Proxyfor is made available under the terms of either the MIT License or the Apache License 2.0, at your option.
 
 See the LICENSE-APACHE and LICENSE-MIT files for license details.

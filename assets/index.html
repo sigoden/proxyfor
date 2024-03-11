@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>proxyfor</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="https://unpkg.com/reset-css@5.0.2/reset.css">
+    <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/styles/stackoverflow-light.min.css">
+    <style>
+        body {
+            display: flex;
+            height: 100vh;
+            padding: 8px;
+            margin: 0;
+            box-sizing: border-box;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+            font-size: 14px;
+            line-height: 1.42857143;
+            color: #333;
+            background-color: #fff;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .left-panel,
+        .right-panel {
+            flex: 1;
+            border: 1px solid #ccc;
+            width: 100%;
+            overflow-y: scroll;
+            overflow-x: hidden;
+        }
+
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .tabs {
+            display: flex;
+            border: 1px solid #ccc;
+            background-color: #f2f2f2;
+        }
+
+        .tab {
+            padding: 5px 10px;
+            cursor: pointer;
+            margin: 2px 2px -1px;
+        }
+
+        .tab.active {
+            border: 1px solid #ccc;
+            background-color: white;
+            border-bottom-color: white;
+        }
+
+        .toolbox {
+            margin-left: auto;
+        }
+
+        .dropdown {
+            position: relative;
+            display: inline-block;
+        }
+
+        .dropbtn {
+            padding: 8px;
+            border: none;
+            cursor: pointer;
+        }
+
+        .dropdown-content {
+            display: none;
+            position: absolute;
+            cursor: pointer;
+            background-color: white;
+            right: 0;
+            box-shadow: 0px 8px 16px 0px rgba(0, 0, 0, 0.2);
+            z-index: 1;
+        }
+
+        .dropdown-content a {
+            display: block;
+            text-decoration: none;
+            padding: 3px 10px;
+            clear: both;
+            font-weight: 400;
+            line-height: 1.42857143;
+            color: #333;
+            white-space: nowrap;
+        }
+
+        .dropdown-content a:hover {
+            color: #262626;
+            text-decoration: none;
+            background-color: #f5f5f5;
+        }
+
+        .traffic-table {
+            width: 100%;
+            table-layout: fixed;
+            border-collapse: collapse;
+            border-spacing: 0;
+        }
+
+        .traffic-table th {
+            text-align: left;
+            background-color: #f2f2f2;
+            border-bottom: solid #bebebe 1px;
+            font-weight: 400;
+            line-height: 23px;
+        }
+
+        .traffic-table tr {
+            line-height: 30px;
+        }
+
+        .traffic-table tr:nth-child(even) {
+            background-color: #f2f2f2;
+        }
+
+        .traffic-table td {
+            overflow: hidden;
+            white-space: nowrap;
+            text-overflow: ellipsis;
+        }
+
+        .traffic-table tr.selected {
+            background-color: #e0ebf5;
+
+        }
+
+        .col-uri {
+            padding-left: 4px;
+        }
+
+        .col-method {
+            width: 70px;
+        }
+
+        .col-status {
+            width: 60px;
+        }
+
+        .traffic-view {
+            flex: 1;
+            border: 1px solid #ccc;
+            border-top: none;
+            padding: 10px;
+            overflow-wrap: break-word;
+        }
+
+        .firstline {
+            font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
+            background-color: #428bca;
+            color: #fff;
+            margin: 0 -8px 2px;
+            padding: 4px 8px;
+            border-radius: 5px;
+            word-break: break-all;
+            max-height: 100px;
+        }
+
+        .header-line {
+            margin-bottom: 0.3em;
+            max-height: 12.4ex;
+            overflow-y: auto;
+        }
+
+        .header-key {
+            font-weight: 700;
+        }
+
+        .code-view {
+            display: block;
+            padding: 10px;
+            margin: 0 0 10px;
+            font-size: 13px;
+            line-height: 1.42857143;
+            color: #333;
+            word-break: break-all;
+            word-wrap: break-word;
+            background-color: #f5f5f5;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            overflow: auto;
+        }
+
+        .media-view {
+            display: block;
+            margin: 0 0 10px;
+        }
+
+        .error-view {
+            display: block;
+            padding: 10px;
+            margin: 0 0 10px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+            color: #8a6d3b;
+            background-color: #fcf8e3;
+            border-color: #faebcc;
+        }
+    </style>
+    <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+    <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
+</head>
+
+<body>
+    <div class="left-panel">
+        <table class="traffic-table">
+            <thead>
+                <tr>
+                    <th class="col-uri">Path</th>
+                    <th class="col-method">Method</th>
+                    <th class="col-status">Status</th>
+                </tr>
+            </thead>
+            <tbody>
+            </tbody>
+        </table>
+    </div>
+    <div class="right-panel">
+        <div class="tabs">
+            <div data-tab="req" class="tab active">Request</div>
+            <div data-tab="res" class="tab">Response</div>
+            <div data-tab="err" class="tab hidden">Error</div>
+            <div class="toolbox">
+                <div class="dropdown copy-dropdown">
+                    <button class="dropbtn">Copy▾</button>
+                    <div class="dropdown-content">
+                        <a data-kind="markdown">Copy as Markdown</a>
+                        <a data-kind="curl">Copy as cURL</a>
+                        <a data-kind="har">Copy as HAR</a>
+                        <a data-kind="res-body">Copy Response Body</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="traffic-view"></div>
+    </div>
+    <script>
+
+        /**
+         * @typedef {Object} Traffic
+         * @property {string} uri
+         * @property {string} method
+         * @property {?string} req_version
+         * @property {?Header[]} req_headers
+         * @property {?BodyData} req_body
+         * @property {?number} status
+         * @property {?Header[]} res_headers
+         * @property {?string} res_version
+         * @property {?BodyData} res_body
+         * @property {?string} error
+         */
+
+        /**
+         * @typedef {Object} Header
+         * @property {string} name
+         * @property {string} value
+         */
+
+        /**
+         * @typedef {Object} BodyData
+         * @property {"utf8"|"base64"} encode 
+         * @property {string} value
+         */
+
+        /**
+         * @typedef {"markdown"|"curl"|"har"|"res-body"} CopyKind
+         */
+
+        const STATUS_CODES = {
+            100: "Continue",
+            101: "Switching Protocols",
+            200: "OK",
+            201: "Created",
+            202: "Accepted",
+            204: "No Content",
+            301: "Moved Permanently",
+            302: "Found",
+            304: "Not Modified",
+            400: "Bad Request",
+            401: "Unauthorized",
+            403: "Forbidden",
+            404: "Not Found",
+            405: "Method Not Allowed",
+            500: "Internal Server Error",
+            502: "Bad Gateway",
+            503: "Service Unavailable",
+            504: "Gateway Timeout",
+        }
+
+        const IMAGE_MIMES = [
+            "image/jpeg",
+            "image/png",
+            "image/gif",
+            "image/svg+xml",
+            "image/webp",
+            "image/bmp",
+            "image/x-icon",
+        ];
+
+        const AUDIO_MIMES = [
+            "audio/mpeg",
+            "audio/ogg",
+            "audio/wav",
+            "audio/webm",
+            "audio/aac",
+            "audio/flac",
+            "audio/x-wav",
+            "audio/x-pn-wav",
+        ];
+
+        const VIDEO_MIMES = [
+            "video/mp4",
+            "video/webm",
+            "video/ogg",
+            "video/quicktime",
+            "video/x-msvideo",
+            "video/x-flv",
+            "video/x-matroska",
+        ]
+
+        const BASE_URL = "/__proxyfor__";
+
+        const subscribeEndpoint = `${BASE_URL}/subscribe`;
+        const getTrafficEndpoint = id => `${BASE_URL}/traffic/${id}`;
+
+        /**
+         * @type {HTMLTableElement}
+         */
+        const $trafficTableBody = document.querySelector(".traffic-table tbody");
+        /**
+         * @type {HTMLDivElement}
+         */
+        const $tabs = document.querySelector(".tabs");
+        /**
+         * @type {HTMLDivElement}
+         */
+        const $trafficView = document.querySelector(".traffic-view");
+
+        /**
+         * @type {HTMLButtonElement}
+         */
+        const $copyDropbtn = document.querySelector(".copy-dropdown .dropbtn");
+
+        /**
+         * @type {HTMLDivElement}
+         */
+        const $copyDropdownContent = document.querySelector(".copy-dropdown .dropdown-content");
+
+        /**
+         * @type {number}
+         */
+        let selectedTrafficId = null;
+
+        /**
+         * @type {"req" | "res"}
+         */
+        let selectedTab = "req"
+
+        /**
+         * @type {Traffic}
+         */
+        let currentTraffic = null;
+
+
+        function handleDOMContentLoaded() {
+            fetch(subscribeEndpoint)
+                .then((res) => {
+                    let buf = "";
+                    let decoder = new TextDecoder();
+                    let reader = res.body.getReader();
+                    reader.read().then(function handleNDJson({ value, done }) {
+                        if (done) {
+                            buf = buf.trim();
+                        } else {
+                            let data = decoder.decode(value, { stream: true });
+                            buf += data;
+                        }
+                        let lines = buf.split("\n");
+                        for (let i = 0; i < lines.length - 1; i++) {
+                            try {
+                                const traffic = JSON.parse(lines[i]);
+                                handleNewTraffic(traffic);
+                            } catch { }
+                        }
+                        buf = lines[lines.length - 1];
+                        return reader.read().then(handleNDJson);
+                    });
+                })
+                .catch((err) => {
+                    console.error("Failed to subscribe", err);
+                });
+
+            $trafficTableBody.addEventListener("click", (e) => {
+                const $tr = e.target.closest("tr");
+                if ($tr) {
+                    const id = $tr.getAttribute("data-traffic-id");
+                    if (id) handleSelectTraffic(id);
+                }
+            });
+            $tabs.addEventListener("click", (e) => {
+                const $tab = e.target.closest(".tab");
+                if ($tab) {
+                    const tab = $tab.getAttribute("data-tab");
+                    if (tab) handleSelectedTab(tab, true);
+                }
+            });
+            $copyDropbtn.addEventListener("click", (e) => {
+                $copyDropdownContent.style.display = "block";
+            });
+            $copyDropdownContent.addEventListener("click", (e) => {
+                $copyDropdownContent.style.display = "none";
+                const $kind = e.target.closest("[data-kind]");
+                if ($kind) {
+                    const kind = $kind.getAttribute("data-kind");
+                    if (kind) handleCopy(kind);
+                }
+            });
+        }
+
+        function handleSelectTraffic(id) {
+            selectedTrafficId = id;
+            const $selected = $trafficTableBody.querySelector("tr.selected");
+            if ($selected) {
+                $selected.classList.remove("selected");
+            }
+            const $newSelected = $trafficTableBody.querySelector(`tr[data-traffic-id="${id}"]`);
+            if ($newSelected) {
+                $newSelected.classList.add("selected");
+                fetch(getTrafficEndpoint(id))
+                    .then(res => res.json())
+                    .then(data => {
+                        currentTraffic = data;
+                    })
+                    .catch(err => {
+                        currentTraffic = null;
+                        console.error(`Failed to fetch traffic ${id}`, err);
+                    })
+                    .finally(updateTabContent)
+            }
+        }
+
+        function handleSelectedTab(tab) {
+            selectedTab = tab;
+            const $active = $tabs.querySelector(".tab.active");
+            if ($active) {
+                $active.classList.remove("active");
+            }
+            const $newActive = $tabs.querySelector(`.tab[data-tab="${tab}"]`);
+            if ($newActive) {
+                $newActive.classList.add("active");
+            }
+            updateTabContent();
+        }
+
+        function handleNewTraffic(traffic) {
+            const { id, uri, method, status } = traffic;
+            $trafficTableBody.insertAdjacentHTML("beforeend", tmplTrafficTableRow(id, uri, method, status));
+        }
+
+        /**
+         * @param {CopyKind} kind
+         */
+        function handleCopy(kind) {
+            if (!currentTraffic) {
+                return;
+            }
+            if (kind == "res-body") {
+                if (currentTraffic.res_body) {
+                    let text = ""
+                    if (currentTraffic.res_body.encode == "base64") {
+                        let contentType = getContentType(currentTraffic.res_headers);
+                        text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
+                    } else {
+                        text = currentTraffic.res_body.value;
+                    }
+                    if (text) {
+                        ClipboardJS.copy(text);
+                    }
+                }
+            } else {
+                fetch(getTrafficEndpoint(selectedTrafficId) + `?${kind}`)
+                    .then(res => res.text())
+                    .then(text => {
+                        ClipboardJS.copy(text);
+                    })
+                    .catch(err => {
+                        console.error(`Failed to copy traffic ${selectedTrafficId}`, err);
+                    })
+
+            }
+        }
+
+        function updateTabContent() {
+            let innerHTML = ""
+            if (currentTraffic) {
+                if (selectedTab === "req") {
+                    innerHTML = tmplTrafficReq(currentTraffic);
+                } else if (selectedTab == "res") {
+                    if (currentTraffic.error) {
+                        handleSelectedTab("err")
+                        return
+                    } else {
+                        innerHTML = tmplTrafficRes(currentTraffic);
+                    }
+                } else if (selectedTab == "err") {
+                    if (currentTraffic.error) {
+                        innerHTML = tmplError(currentTraffic.error);
+                    } else {
+                        handleSelectedTab("res")
+                        return
+                    }
+                }
+            }
+            if (currentTraffic?.error) {
+                $tabs.querySelector(".tab[data-tab='res']").classList.add("hidden");
+                $tabs.querySelector(".tab[data-tab='err']").classList.remove("hidden");
+            } else {
+                $tabs.querySelector(".tab[data-tab='res']").classList.remove("hidden");
+                $tabs.querySelector(".tab[data-tab='err']").classList.add("hidden");
+            }
+            $trafficView.innerHTML = innerHTML;
+        }
+
+        function tmplTrafficTableRow(id, uri, method, status) {
+            return `
+            <tr data-traffic-id="${id}">
+                <td class="col-uri">${uri}</td>
+                <td class="col-method">${method}</td>
+                <td class="col-status">${status || ""}</td>
+            </tr>`
+        }
+
+        /**
+         * @param {Traffic} traffic
+         */
+        function tmplTrafficReq(traffic) {
+            return [
+                `<div class="firstline">${traffic.method} ${traffic.uri} ${traffic.req_version || ""}</div>`,
+                tmplHaders(traffic.req_headers),
+                tmplBody(traffic.req_body, traffic.req_headers),
+            ].join("");
+        }
+
+        /**
+         * @param {Traffic} traffic
+         */
+        function tmplTrafficRes(traffic) {
+            return [
+                `<div class="firstline">${[traffic.res_version || "", traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
+                tmplHaders(traffic.res_headers),
+                tmplBody(traffic.res_body, traffic.res_headers),
+            ].join("");
+        }
+
+        /**
+         * @param {?Header[]} headers
+         */
+        function tmplHaders(headers) {
+            return (headers || []).map(({name, value}) =>
+                `<div class="header-line"><span class="header-key">${name}</span>:&nbsp;<span class="header-value">${value}</span></div>`
+            ).join("");
+        }
+
+        /**
+         * @param {BodyData} body
+         * @param {?Header[]} headers
+         */
+        function tmplBody(body, headers) {
+            if (!body) return "";
+            let { encode, value } = body;
+            let contentType = getContentType(headers);
+            if (encode == "utf8") {
+                let language = highlightLanguage(contentType);
+                const highlightedCode = hljs.getLanguage(language)
+                    ? hljs.highlight(value, { language }).value
+                    : hljs.highlightAuto(value).value;
+                return `<div class="code-view"><pre><code>${highlightedCode}</code></pre></div>`;
+            }
+            if (encode == "base64") {
+                if (
+                    IMAGE_MIMES.includes(contentType)
+                ) {
+                    return `<div class="media-view"><img src="data:${contentType};base64,${value}" alt="image" style="max-width: 100%;"></div>`;
+                } else if (AUDIO_MIMES.includes(contentType)) {
+                    return `<div class="media-view"><audio controls style="max-width: 100%;"><source src="data:${contentType};base64,${value}" type="${contentType}"></audio></div>`;
+                } else if (VIDEO_MIMES.includes(contentType)) {
+                    return `<div class="media-view"><video controls style="max-width: 100%;"><source src="data:${contentType};base64,${value}" type="${contentType}"></video></div>`;
+                } else {
+                    let filename = "download.bin";
+                    let disposition = getHeader(headers, "content-disposition")
+                    if (/filename="([^"]+?)"/.test(disposition)) {
+                        filename = disposition.match(/filename="(.*?)"/)[1] || filename;
+                    }
+                    let downloadUrl = URL.createObjectURL(base64ToBlob(value, contentType || "application/octet-stream"));
+                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`
+                }
+            }
+            return `<div class="code-view">${value}</div>`;
+        }
+
+        function tmplError(error) {
+            if (!error) return "";
+            return `<div class="error-view">${error}</div>`
+        }
+
+        /**
+         * @param {?Header[]} headers
+         */
+        function getContentType(headers) {
+            return getHeader(headers, "content-type").split(';')[0].trim();
+        }
+
+        /**
+         * @param {?Header[]} headers
+         */
+        function getHeader(headers, name) {
+            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || ""
+        }
+
+        /** 
+         * @param {string} contentType
+         */
+        function highlightLanguage(contentType) {
+            let value = contentType.startsWith('text/') || contentType.startsWith('application/')
+                ? contentType.substring(contentType.indexOf('/') + 1)
+                : '';
+
+            return value.startsWith('x-') ? value.substring(2) : value;
+        }
+
+        function base64ToBlob(base64String, contentType) {
+            const byteCharacters = atob(base64String);
+            const byteArrays = [];
+
+            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
+                const slice = byteCharacters.slice(offset, offset + 512);
+
+                const byteNumbers = new Array(slice.length);
+                for (let i = 0; i < slice.length; i++) {
+                    byteNumbers[i] = slice.charCodeAt(i);
+                }
+
+                const byteArray = new Uint8Array(byteNumbers);
+                byteArrays.push(byteArray);
+            }
+
+            return new Blob(byteArrays, { type: contentType });
+        }
+
+        document.addEventListener("DOMContentLoaded", handleDOMContentLoaded);
+    </script>
+</body>
+
+</html>
