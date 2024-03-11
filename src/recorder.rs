@@ -3,20 +3,20 @@ use crate::traffic::{Body, Header, Headers, Traffic};
 use http::{HeaderMap, StatusCode, Version};
 
 #[derive(Debug)]
-pub struct Recorder {
+pub(crate) struct Recorder {
     traffic: Traffic,
     valid: bool,
     print_mode: PrintMode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PrintMode {
+pub(crate) enum PrintMode {
     PathOnly,
     Markdown,
 }
 
 impl Recorder {
-    pub fn new(uri: &str, method: &str) -> Self {
+    pub(crate) fn new(uri: &str, method: &str) -> Self {
         let traffic = Traffic::new(uri, method);
         Self {
             traffic,
@@ -25,17 +25,17 @@ impl Recorder {
         }
     }
 
-    pub fn set_req_version(&mut self, http_version: &Version) -> &mut Self {
+    pub(crate) fn set_req_version(&mut self, http_version: &Version) -> &mut Self {
         self.traffic.req_version = Some(format!("{http_version:?}"));
         self
     }
 
-    pub fn set_req_headers(&mut self, headers: &HeaderMap) -> &mut Self {
+    pub(crate) fn set_req_headers(&mut self, headers: &HeaderMap) -> &mut Self {
         self.traffic.req_headers = Some(convert_headers(headers));
         self
     }
 
-    pub fn set_req_body(&mut self, body: &[u8]) -> &mut Self {
+    pub(crate) fn set_req_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
@@ -44,22 +44,22 @@ impl Recorder {
         }
     }
 
-    pub fn set_res_status(&mut self, status: StatusCode) -> &mut Self {
+    pub(crate) fn set_res_status(&mut self, status: StatusCode) -> &mut Self {
         self.traffic.status = Some(status.into());
         self
     }
 
-    pub fn set_res_version(&mut self, http_version: &Version) -> &mut Self {
+    pub(crate) fn set_res_version(&mut self, http_version: &Version) -> &mut Self {
         self.traffic.res_version = Some(format!("{http_version:?}"));
         self
     }
 
-    pub fn set_res_headers(&mut self, headers: &HeaderMap) -> &mut Self {
+    pub(crate) fn set_res_headers(&mut self, headers: &HeaderMap) -> &mut Self {
         self.traffic.res_headers = Some(convert_headers(headers));
         self
     }
 
-    pub fn set_res_body(&mut self, body: &[u8]) -> &mut Self {
+    pub(crate) fn set_res_body(&mut self, body: &[u8]) -> &mut Self {
         if body.is_empty() {
             self
         } else {
@@ -68,30 +68,30 @@ impl Recorder {
         }
     }
 
-    pub fn add_error(&mut self, error: String) -> &mut Self {
+    pub(crate) fn add_error(&mut self, error: String) -> &mut Self {
         self.traffic.add_error(error);
         self
     }
 
-    pub fn check_match(&mut self, is_match: bool) -> &mut Self {
+    pub(crate) fn check_match(&mut self, is_match: bool) -> &mut Self {
         self.valid = self.valid && is_match;
         self
     }
 
-    pub fn change_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
+    pub(crate) fn change_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
         self.print_mode = print_mode;
         self
     }
 
-    pub fn is_valid(&self) -> bool {
+    pub(crate) fn is_valid(&self) -> bool {
         self.valid
     }
 
-    pub fn take_traffic(self) -> Traffic {
+    pub(crate) fn take_traffic(self) -> Traffic {
         self.traffic
     }
 
-    pub fn print(&self) {
+    pub(crate) fn print(&self) {
         match self.print_mode {
             PrintMode::PathOnly => {
                 let (method, uri, _) = self.traffic.head();
@@ -110,11 +110,11 @@ pub(crate) struct ErrorRecorder {
 }
 
 impl ErrorRecorder {
-    pub fn new(recorder: Recorder) -> Self {
+    pub(crate) fn new(recorder: Recorder) -> Self {
         Self { recorder }
     }
 
-    pub fn add_error(&mut self, error: String) -> &mut Self {
+    pub(crate) fn add_error(&mut self, error: String) -> &mut Self {
         self.recorder.add_error(error);
         self
     }
