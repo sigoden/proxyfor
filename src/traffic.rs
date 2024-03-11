@@ -48,9 +48,17 @@ impl Traffic {
         (&self.method, &self.uri, self.status)
     }
 
-    pub fn to_markdown(&self, print: bool) -> String {
+    pub fn oneline(&self) -> String {
+        let mut output = format!("{} {}", self.method, self.uri,);
+        if let Some(status) = self.status {
+            output.push_str(&format!(" {}", status));
+        }
+        output
+    }
+
+    pub fn markdown(&self, print: bool) -> String {
         let mut lines: Vec<String> = vec![];
-        lines.push(format!("\n# {} {}", self.method, self.uri));
+        lines.push(format!("\n# {}", self.oneline()));
 
         if let Some(headers) = &self.req_headers {
             lines.push(render_header("REQUEST HEADERS", headers));
@@ -58,10 +66,6 @@ impl Traffic {
 
         if let Some(body) = &self.req_body {
             lines.push(render_body("REQUEST BODY", body, &self.req_headers, print));
-        }
-
-        if let Some(status) = &self.status {
-            lines.push(format!("RESPONSE STATUS: {status}"));
         }
 
         if let Some(headers) = &self.res_headers {
@@ -78,7 +82,7 @@ impl Traffic {
         lines.join("\n\n")
     }
 
-    pub fn to_har(&self) -> Value {
+    pub fn har(&self) -> Value {
         let request = json!({
             "method": self.method,
             "url": self.uri,
@@ -123,7 +127,7 @@ impl Traffic {
         })
     }
 
-    pub fn to_curl(&self) -> String {
+    pub fn curl(&self) -> String {
         let mut output = format!("curl {}", self.uri);
         let escape_single_quote = |v: &str| v.replace('\'', r#"'\''"#);
         if self.method != "GET" {
@@ -154,12 +158,12 @@ impl Traffic {
 
     pub fn export<'a>(&'a self, format: &str) -> Result<(String, &'a str)> {
         match format {
-            "markdown" => Ok((self.to_markdown(false), "text/markdown; charset=UTF-8")),
+            "markdown" => Ok((self.markdown(false), "text/markdown; charset=UTF-8")),
             "har" => Ok((
-                serde_json::to_string_pretty(&self.to_har())?,
+                serde_json::to_string_pretty(&self.har())?,
                 "application/json; charset=UTF-8",
             )),
-            "curl" => Ok((self.to_curl(), "text/plain; charset=UTF-8")),
+            "curl" => Ok((self.curl(), "text/plain; charset=UTF-8")),
             _ => bail!("unsupported format: {}", format),
         }
     }
@@ -411,6 +415,7 @@ fn md_lang(content_type: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     fn create_traffic1() -> Traffic {
         Traffic {
@@ -445,7 +450,7 @@ mod tests {
     fn test_render_markdown() {
         let traffic = create_traffic1();
         let expect = r#"
-# PUT http://example.com/?q1=3
+# PUT http://example.com/?q1=3 200
 
 REQUEST HEADERS
 ```
@@ -458,8 +463,6 @@ REQUEST BODY
 ```
 req_body
 ```
-
-RESPONSE STATUS: 200
 
 RESPONSE HEADERS
 ```
@@ -474,7 +477,7 @@ RESPONSE BODY
 ```
 
 ERROR: error"#;
-        assert_eq!(traffic.to_markdown(false), expect);
+        assert_eq!(traffic.markdown(false), expect);
     }
 
     #[test]
@@ -486,7 +489,7 @@ ERROR: error"#;
   -H 'cookie: c1=1; c2=2' \
   -H 'cookie: c3=3' \
   -d 'req_body'"#;
-        assert_eq!(traffic.to_curl(), expect);
+        assert_eq!(traffic.curl(), expect);
     }
 
     #[test]
@@ -595,7 +598,7 @@ ERROR: error"#;
   }
 }"#;
         assert_eq!(
-            serde_json::to_string_pretty(&traffic.to_har()).unwrap(),
+            serde_json::to_string_pretty(&traffic.har()).unwrap(),
             expect,
         );
     }

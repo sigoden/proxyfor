@@ -11,7 +11,7 @@ pub(crate) struct Recorder {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PrintMode {
-    PathOnly,
+    Oneline,
     Markdown,
 }
 
@@ -93,12 +93,11 @@ impl Recorder {
 
     pub(crate) fn print(&self) {
         match self.print_mode {
-            PrintMode::PathOnly => {
-                let (method, uri, _) = self.traffic.head();
-                println!("# {method} {uri}");
+            PrintMode::Oneline => {
+                println!("# {}", self.traffic.oneline());
             }
             PrintMode::Markdown => {
-                println!("{}", self.traffic.to_markdown(true));
+                println!("{}", self.traffic.markdown(true));
             }
         }
     }
@@ -183,7 +182,7 @@ mod tests {
     fn test_recorder() {
         let recorder = create_recorder1();
         let expect = r#"
-# PUT http://example.com/?q1=3
+# PUT http://example.com/?q1=3 200
 
 REQUEST HEADERS
 ```
@@ -196,8 +195,6 @@ REQUEST BODY
 ```
 req_body
 ```
-
-RESPONSE STATUS: 200
 
 RESPONSE HEADERS
 ```
@@ -212,6 +209,6 @@ RESPONSE BODY
 ```
 
 ERROR: error"#;
-        assert_eq!(recorder.traffic.to_markdown(true), expect);
+        assert_eq!(recorder.traffic.markdown(true), expect);
     }
 }

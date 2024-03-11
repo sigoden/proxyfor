@@ -77,7 +77,7 @@ impl Server {
         } else {
             let mut recorder = Recorder::new(&req_uri, method.as_str());
             if self.web {
-                recorder.change_print_mode(PrintMode::PathOnly);
+                recorder.change_print_mode(PrintMode::Oneline);
             }
             self.internal_server_error(&mut res, "No reserver proxy url", recorder);
             return Ok(res);
@@ -130,7 +130,7 @@ impl Server {
 
         let mut recorder = Recorder::new(&req_uri, method.as_str());
         if self.web {
-            recorder.change_print_mode(PrintMode::PathOnly);
+            recorder.change_print_mode(PrintMode::Oneline);
         }
 
         let req_version = req.version();
