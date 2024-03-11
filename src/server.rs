@@ -1,7 +1,7 @@
 use crate::{
     certificate_authority::CertificateAuthority,
     filter::{is_match_title, is_match_type, Filter},
-    recorder::{ErrorRecorder, Recorder},
+    recorder::{ErrorRecorder, PrintMode, Recorder},
     rewind::Rewind,
     state::State,
 };
@@ -53,6 +53,7 @@ pub(crate) struct Server {
     pub(crate) filters: Vec<Filter>,
     pub(crate) mime_filters: Vec<String>,
     pub(crate) state: State,
+    pub(crate) web: bool,
     #[allow(unused)]
     pub(crate) running: Arc<AtomicBool>,
 }
@@ -74,11 +75,11 @@ impl Server {
                 format!("{base_url}{req_uri}")
             }
         } else {
-            self.internal_server_error(
-                &mut res,
-                "No reserver proxy url",
-                Recorder::new(&req_uri, method.as_str()),
-            );
+            let mut recorder = Recorder::new(&req_uri, method.as_str());
+            if self.web {
+                recorder.change_print_mode(PrintMode::PathOnly);
+            }
+            self.internal_server_error(&mut res, "No reserver proxy url", recorder);
             return Ok(res);
         };
 
@@ -88,15 +89,20 @@ impl Server {
         };
 
         if let Some(path) = path.strip_prefix(CERT_PREFIX) {
-            return match self.handle_cert_index(&mut res, path).await {
-                Ok(()) => Ok(res),
-                Err(err) => {
-                    *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                    set_res_body(&mut res, err.to_string());
-                    Ok(res)
-                }
+            if let Err(err) = self.handle_cert_index(&mut res, path).await {
+                *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+                set_res_body(&mut res, err.to_string());
             };
+            return Ok(res);
         } else if let Some(path) = path.strip_prefix(WEB_PREFIX) {
+            if !self.web {
+                *res.status_mut() = StatusCode::BAD_REQUEST;
+                set_res_body(
+                    &mut res,
+                    "The web interface is disabled. To enable it, run the command with the `--web` flag.".to_string(),
+                );
+                return Ok(res);
+            }
             if method != Method::GET {
                 *res.status_mut() = StatusCode::METHOD_NOT_ALLOWED;
                 return Ok(res);
@@ -123,6 +129,9 @@ impl Server {
         }
 
         let mut recorder = Recorder::new(&req_uri, method.as_str());
+        if self.web {
+            recorder.change_print_mode(PrintMode::PathOnly);
+        }
 
         let req_version = req.version();
         recorder.set_req_version(&req_version);
@@ -222,7 +231,7 @@ impl Server {
             }
         };
 
-        if !proxy_res_body.is_empty() {
+        if !proxy_res_body.is_empty() && recorder.is_valid() {
             let decompress_body = decompress(&proxy_res_body, encoding)
                 .await
                 .unwrap_or_else(|| proxy_res_body.to_vec());
@@ -238,7 +247,7 @@ impl Server {
         Ok(res)
     }
 
-    async fn handle_cert_index(self: Arc<Self>, res: &mut Response, path: &str) -> Result<()> {
+    async fn handle_cert_index(&self, res: &mut Response, path: &str) -> Result<()> {
         if path.is_empty() {
             set_res_body(res, CERT_INDEX.to_string());
             res.headers_mut().insert(
@@ -262,7 +271,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_web_index(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+    async fn handle_web_index(&self, res: &mut Response) -> Result<()> {
         set_res_body(res, WEB_INDEX.to_string());
         res.headers_mut().insert(
             CONTENT_TYPE,
@@ -273,7 +282,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_subscribe(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+    async fn handle_subscribe(&self, res: &mut Response) -> Result<()> {
         let (init_data, receiver) = (self.state.list(), self.state.subscribe());
         let stream = BroadcastStream::new(receiver);
         let stream = stream
@@ -297,7 +306,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_list_traffics(self: &Arc<Self>, res: &mut Response) -> Result<()> {
+    async fn handle_list_traffics(&self, res: &mut Response) -> Result<()> {
         set_res_body(res, serde_json::to_string_pretty(&self.state.list())?);
         res.headers_mut().insert(
             CONTENT_TYPE,
@@ -308,12 +317,7 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_get_traffic(
-        self: &Arc<Self>,
-        res: &mut Response,
-        id: &str,
-        query: &str,
-    ) -> Result<()> {
+    async fn handle_get_traffic(&self, res: &mut Response, id: &str, query: &str) -> Result<()> {
         match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
             Some(traffic) => {
                 match query {
@@ -475,7 +479,7 @@ impl Server {
             .await
     }
 
-    fn take_recorder(self: Arc<Self>, recorder: Recorder) {
+    fn take_recorder(&self, recorder: Recorder) {
         if recorder.is_valid() {
             recorder.print();
             self.state.add_traffic(recorder.take_traffic())
@@ -483,7 +487,7 @@ impl Server {
     }
 
     fn internal_server_error<T: std::fmt::Display>(
-        self: Arc<Self>,
+        &self,
         res: &mut Response,
         error: T,
         mut recorder: Recorder,

@@ -10,9 +10,9 @@ A simple and portable proxy for capturing HTTP and HTTPS traffic.
 - Support forward proxy
 - Support reverse proxy
 - Support filtering
-- Integrated web inteface
-- Integrated certificates installation webapp
-- Log traffic to markdown
+- Integrate web inteface
+- Integrate certificates installation webapp
+- Export in Markdown, cURL, or HAR formats
 
 ## Installation
 
@@ -71,6 +71,7 @@ Options:
   -l, --listen <ADDR>         Listening ip and port address [default: 0.0.0.0:8080]
   -f, --filters <REGEX>       Only inspect http(s) traffic whose `{method} {uri}` matches the regex
   -m, --mime-filters <VALUE>  Only inspect http(s) traffic whose content-type matches the value
+  -w, --web                   Enable web interface
   -h, --help                  Print help
   -V, --version               Print version
 ```
@@ -81,6 +82,12 @@ Change the ip and port.
 proxyfor -l 18080
 proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:18080
+```
+
+Enable web inteface with `-w/--web`
+
+```sh
+proxyfor --web
 ```
 
 Use `-f/--filters` to filter traffic by matching `{method} {uri}`.

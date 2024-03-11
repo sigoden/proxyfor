@@ -49,15 +49,18 @@ async fn main() -> Result<()> {
         filters,
         mime_filters,
         state: state::State::new(),
+        web: cli.web,
         running: running.clone(),
     });
     let handle = run(server, ip, port).await?;
     let running = Arc::new(AtomicBool::new(true));
     eprintln!("HTTP(S) proxy listening at {}:{}", ip, port);
-    eprintln!(
-        "Web inteface accessible at http://{}:{}{}/",
-        ip, port, WEB_PREFIX
-    );
+    if cli.web {
+        eprintln!(
+            "Web inteface accessible at http://{}:{}{}/",
+            ip, port, WEB_PREFIX
+        );
+    }
     tokio::select! {
         ret = handle => {
             if let Err(e) = ret {

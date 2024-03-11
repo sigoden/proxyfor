@@ -10,6 +10,7 @@ const HEX_VIEW_SIZE: usize = 320;
 pub struct Recorder {
     traffic: Traffic,
     valid: bool,
+    print_mode: PrintMode,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -40,12 +41,19 @@ pub struct Body {
     value: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrintMode {
+    PathOnly,
+    Markdown,
+}
+
 impl Recorder {
     pub fn new(uri: &str, method: &str) -> Self {
         let traffic = Traffic::new(uri, method);
         Self {
             traffic,
             valid: true,
+            print_mode: PrintMode::Markdown,
         }
     }
 
@@ -102,6 +110,11 @@ impl Recorder {
         self
     }
 
+    pub fn change_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
+        self.print_mode = print_mode;
+        self
+    }
+
     pub fn is_valid(&self) -> bool {
         self.valid
     }
@@ -111,7 +124,15 @@ impl Recorder {
     }
 
     pub fn print(&self) {
-        println!("{}", self.traffic.to_markdown(true));
+        match self.print_mode {
+            PrintMode::PathOnly => {
+                let (method, uri, _) = self.traffic.head();
+                println!("# {method} {uri}");
+            }
+            PrintMode::Markdown => {
+                println!("{}", self.traffic.to_markdown(true));
+            }
+        }
     }
 }
 
