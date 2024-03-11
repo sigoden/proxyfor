@@ -5,6 +5,7 @@ mod recorder;
 mod rewind;
 mod server;
 mod state;
+mod traffic;
 
 use crate::{
     certificate_authority::load_ca,

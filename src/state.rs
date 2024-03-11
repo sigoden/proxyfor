@@ -1,4 +1,4 @@
-use crate::recorder::Traffic;
+use crate::traffic::Traffic;
 
 use indexmap::IndexMap;
 use serde::Serialize;
