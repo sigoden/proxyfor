@@ -424,6 +424,11 @@
                     if (kind) handleCopy(kind);
                 }
             });
+            document.addEventListener("click", function(e) {
+                if (!e.target.closest(".dropdown")) {
+                    $copyDropdownContent.style.display = "none"
+                }
+            });
         }
 
         function handleSelectTraffic(id) {
