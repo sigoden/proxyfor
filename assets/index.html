@@ -223,6 +223,7 @@
     </style>
     <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
     <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
+    <script src="https://unpkg.com/sanitize-html@1.20.1/dist/sanitize-html.min.js"></script>
 </head>
 
 <body>
@@ -462,7 +463,7 @@
             });
             document.addEventListener("click", function (e) {
                 if (!e.target.closest(".dropdown")) {
-                    $copyDropdownContent.style.display = "none"
+                    $copyDropdownContent.style.display = "none";
                 }
             });
         }
@@ -485,7 +486,7 @@
                         currentTraffic = null;
                         console.error(`Failed to fetch traffic ${id}`, err);
                     })
-                    .finally(updateTabContent)
+                    .finally(updateTabContent);
             }
         }
 
@@ -516,7 +517,7 @@
             }
             if (kind == "res-body") {
                 if (currentTraffic.res_body) {
-                    let text = ""
+                    let text = "";
                     if (currentTraffic.res_body.encode == "base64") {
                         let contentType = getContentType(currentTraffic.res_headers);
                         text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
@@ -541,10 +542,10 @@
         }
 
         function updateTabContent() {
-            let innerHTML = ""
+            let innerHTML = "";
 
             if (!websocketAbortController.signal.aborted) {
-                websocketAbortController.abort()
+                websocketAbortController.abort();
             }
             websocketAbortController = new AbortController();
 
@@ -553,8 +554,8 @@
                     innerHTML = tmplTrafficReq(currentTraffic);
                 } else if (selectedTab == "res") {
                     if (currentTraffic.error) {
-                        handleSelectedTab("err")
-                        return
+                        handleSelectedTab("err");
+                        return;
                     } else {
                         innerHTML = tmplTrafficRes(currentTraffic);
                     }
@@ -562,15 +563,15 @@
                     if (currentTraffic.websocket_id) {
                         handleSubscribeWebsocket(currentTraffic.websocket_id);
                     } else {
-                        handleSelectedTab("res")
-                        return
+                        handleSelectedTab("res");
+                        return;
                     }
                 } else if (selectedTab == "err") {
                     if (currentTraffic.error) {
                         innerHTML = tmplError(currentTraffic.error);
                     } else {
-                        handleSelectedTab("res")
-                        return
+                        handleSelectedTab("res");
+                        return;
                     }
                 }
             }
@@ -630,7 +631,7 @@
             if (message.error) {
                 tmpl = tmplError(message.error);
             } else if (message.data) {
-                tmpl = tmplWebsocketData(message.data)
+                tmpl = tmplWebsocketData(message.data);
             }
             $mainView.insertAdjacentHTML("beforeend", tmpl);
         }
@@ -641,7 +642,7 @@
                 <td class="col-uri">${uri}</td>
                 <td class="col-method">${method}</td>
                 <td class="col-status">${status || ""}</td>
-            </tr>`
+            </tr>`;
         }
 
         /**
@@ -684,6 +685,7 @@
             let { encode, value } = body;
             let contentType = getContentType(headers);
             if (encode == "utf8") {
+                value = sanitizeHtml(value);
                 let language = highlightLanguage(contentType);
                 const highlightedCode = hljs.getLanguage(language)
                     ? hljs.highlight(value, { language }).value
@@ -706,7 +708,7 @@
                         filename = disposition.match(/filename="(.*?)"/)[1] || filename;
                     }
                     let downloadUrl = URL.createObjectURL(base64ToBlob(value, contentType || "application/octet-stream"));
-                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`
+                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`;
                 }
             }
             return `<div class="code-view">${value}</div>`;
@@ -714,7 +716,7 @@
 
         function tmplError(error) {
             if (!error) return "";
-            return `<div class="error-view">${error}</div>`
+            return `<div class="error-view">${error}</div>`;
         }
 
         /**
@@ -727,18 +729,19 @@
             } else {
                 arrow = '<i class="ws-send">🠚</i>';
             }
-            let date = formatDate(new Date(data.create))
+            let date = formatDate(new Date(data.create));
             let value = data.body.value;
             if (data.body.encode == "base64") {
-                value = `data:;base64,${value}`
+                value = `data:;base64,${value}`;
+            } else {
+                value = sanitizeHtml(value);
             }
             return `<div class="ws-msg">
                 <small>${arrow}<span class="ws-date">${date}</span></small>
                 <div class="code-view">
                     <pre><code>${value}</code></pre>
                 </div>
-            </div>`
-
+            </div>`;
         }
 
         /**
@@ -752,7 +755,7 @@
          * @param {?Header[]} headers
          */
         function getHeader(headers, name) {
-            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || ""
+            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || "";
         }
 
         /** 
