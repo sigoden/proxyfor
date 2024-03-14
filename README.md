@@ -3,14 +3,15 @@
 [![CI](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml/badge.svg)](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml)
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
 
-A simple and portable proxy for capturing HTTP and HTTPS traffic.
+A lightweight proxy for monitoring HTTP, HTTPS, and WebSocket traffic.
 
 ## Features
 
 - Support forward proxy
 - Support reverse proxy
 - Support filtering
-- Integrate web inteface
+- Support HTTP/HTTPS/WS/WSS protocols
+- Integrate web interface
 - Integrate certificates installation webapp
 - Export in Markdown, cURL, or HAR formats
 
@@ -84,7 +85,7 @@ proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:18080
 ```
 
-Enable web inteface with `-w/--web`
+Enable web interface with `-w/--web`
 
 ```sh
 proxyfor --web

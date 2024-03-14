@@ -399,7 +399,7 @@ fn har_res_cookies(headers: &Option<Headers>) -> Value {
                         if let Ok(datetime) =
                             datetime.format(&time::format_description::well_known::Rfc3339)
                         {
-                            json_cookie["expries"] = datetime.into();
+                            json_cookie["expires"] = datetime.into();
                         }
                     }
                     if let Some(value) = cookie.http_only() {
@@ -608,14 +608,14 @@ ERROR: error"#;
               "value": "1",
               "path": "/",
               "domain": "example.com",
-              "expries": "2015-10-21T07:28:00Z"
+              "expires": "2015-10-21T07:28:00Z"
             },
             {
               "name": "sc2",
               "value": "2",
               "path": "/",
               "domain": "example.com",
-              "expries": "2015-10-21T07:28:00Z"
+              "expires": "2015-10-21T07:28:00Z"
             }
           ],
           "headers": [

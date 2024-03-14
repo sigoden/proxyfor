@@ -63,7 +63,7 @@ async fn main() -> Result<()> {
     eprintln!("HTTP(S) proxy listening at {}:{}", ip, port);
     if cli.web {
         eprintln!(
-            "Web inteface accessible at http://{}:{}{}/",
+            "Web interface accessible at http://{}:{}{}/",
             ip, port, WEB_PREFIX
         );
     }
