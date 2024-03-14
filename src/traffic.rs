@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 const HEX_VIEW_SIZE: usize = 320;
 
@@ -9,6 +10,8 @@ const HEX_VIEW_SIZE: usize = 320;
 pub struct Traffic {
     pub uri: String,
     pub method: String,
+    #[serde(serialize_with = "serialize_datetime")]
+    pub start: OffsetDateTime,
     pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
     pub req_body: Option<Body>,
@@ -24,6 +27,7 @@ impl Traffic {
         Self {
             uri: uri.to_string(),
             method: method.to_string(),
+            start: OffsetDateTime::now_utc(),
             req_version: None,
             req_headers: None,
             req_body: None,
@@ -90,7 +94,7 @@ impl Traffic {
             "cookies": har_req_cookies(&self.req_headers),
             "headers": har_headers(&self.req_headers),
             "queryString": har_query_string(&self.uri),
-            "postData": har_body(&self.req_body, &self.req_headers),
+            "postData": har_req_body(&self.req_body, &self.req_headers),
             "headersSize": -1,
             "bodySize": -1,
         });
@@ -101,7 +105,7 @@ impl Traffic {
                 "httpVersion": self.res_version,
                 "cookies": har_res_cookies(&self.res_headers),
                 "headers": har_headers(&self.res_headers),
-                "content": har_body(&self.res_body, &self.res_headers),
+                "content": har_res_body(&self.res_body, &self.res_headers),
                 "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
                 "headersSize": -1,
                 "bodySize": -1,
@@ -119,8 +123,18 @@ impl Traffic {
                 "pages": [],
                 "entries": [
                     {
+                        "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
+                        "time": -1,
                         "request": request,
-                        "response": response
+                        "response": response,
+                        "cache": {},
+                        "timings": {
+                            "connect": -1,
+                            "ssl": -1,
+                            "send": -1,
+                            "receive": -1,
+                            "wait": -1
+                        }
                     }
                 ]
             }
@@ -332,17 +346,25 @@ fn har_req_cookies(headers: &Option<Headers>) -> Value {
     }
 }
 
-fn har_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
+fn har_req_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
+    let content_type = get_header_value(headers, "content-type").unwrap_or_default();
+    match body {
+        Some(body) => json!({"mimeType": content_type, "text": body.value}),
+        None => json!({"mimeType": content_type, "text": ""}),
+    }
+}
+
+fn har_res_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
     let content_type = get_header_value(headers, "content-type").unwrap_or_default();
     match body {
         Some(body) => {
-            let mut value = json!({"mimeType": content_type, "text": body.value});
+            let mut value = json!({"mimeType": content_type, "text": body.value, "size": -1});
             if !body.is_utf8() {
                 value["encoding"] = "base64".into();
             }
             value
         }
-        None => json!({"mimeType": content_type, "text":""}),
+        None => json!({"mimeType": content_type, "text": "", "size": 0}),
     }
 }
 
@@ -412,15 +434,25 @@ fn md_lang(content_type: &str) -> &str {
     }
 }
 
+fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let formatted = date.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
+    serializer.serialize_str(&formatted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use time::format_description::well_known::Rfc3339;
 
     fn create_traffic1() -> Traffic {
         Traffic {
             uri: "http://example.com/?q1=3".to_string(),
             method: "PUT".to_string(),
+            start: OffsetDateTime::parse("2024-03-14T03:48:34.821Z", &Rfc3339).unwrap(),
             req_version: None,
             req_headers: Some(vec![
                 Header::new("content-type", "plain/text"),
@@ -506,6 +538,8 @@ ERROR: error"#;
     "pages": [],
     "entries": [
       {
+        "startedDateTime": "2024-03-14T03:48:34.821Z",
+        "time": -1,
         "request": {
           "method": "PUT",
           "url": "http://example.com/?q1=3",
@@ -587,11 +621,20 @@ ERROR: error"#;
           ],
           "content": {
             "mimeType": "application/json; charset=utf-8",
-            "text": "{\"message\":\"OK\"}"
+            "text": "{\"message\":\"OK\"}",
+            "size": -1
           },
           "redirectURL": "",
           "headersSize": -1,
           "bodySize": -1
+        },
+        "cache": {},
+        "timings": {
+          "connect": -1,
+          "ssl": -1,
+          "send": -1,
+          "receive": -1,
+          "wait": -1
         }
       }
     ]
