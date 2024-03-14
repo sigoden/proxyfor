@@ -417,24 +417,24 @@ impl Server {
 
     async fn handle_websocket(
         self: Arc<Self>,
-        server_socket: WebSocketStream<TokioIo<Upgraded>>,
+        client_to_server_socket: WebSocketStream<TokioIo<Upgraded>>,
         req: hyper::Request<()>,
         id: usize,
     ) -> Result<()> {
-        let (client_socket, _) = tokio_tungstenite::connect_async(req).await?;
+        let (server_to_client_socket, _) = tokio_tungstenite::connect_async(req).await?;
 
-        let (server_sink, server_stream) = server_socket.split();
-        let (client_sink, client_stream) = client_socket.split();
+        let (to_client_sink, from_client_stream) = client_to_server_socket.split();
+        let (to_server_sink, from_server_stream) = server_to_client_socket.split();
 
         let server = self.clone();
         tokio::spawn(async move {
             server
-                .handle_websocket_message(server_stream, client_sink, id, false)
+                .handle_websocket_message(from_client_stream, to_server_sink, id, false)
                 .await
         });
 
         tokio::spawn(async move {
-            self.handle_websocket_message(client_stream, server_sink, id, true)
+            self.handle_websocket_message(from_server_stream, to_client_sink, id, true)
                 .await
         });
 
