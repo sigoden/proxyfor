@@ -39,7 +39,7 @@ impl Recorder {
         if body.is_empty() {
             self
         } else {
-            self.traffic.req_body = Some(Body::new(body));
+            self.traffic.req_body = Some(Body::bytes(body));
             self
         }
     }
@@ -63,9 +63,14 @@ impl Recorder {
         if body.is_empty() {
             self
         } else {
-            self.traffic.res_body = Some(Body::new(body));
+            self.traffic.res_body = Some(Body::bytes(body));
             self
         }
+    }
+
+    pub(crate) fn set_websocket_id(&mut self, id: usize) -> &mut Self {
+        self.traffic.websocket_id = Some(id);
+        self
     }
 
     pub(crate) fn add_error(&mut self, error: String) -> &mut Self {

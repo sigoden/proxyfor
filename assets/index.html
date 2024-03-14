@@ -329,7 +329,7 @@
 
         const BASE_URL = "/__proxyfor__";
 
-        const subscribeEndpoint = `${BASE_URL}/subscribe`;
+        const subscribeTrafficsEndpoint = `${BASE_URL}/subscribe/traffics`;
         const getTrafficEndpoint = id => `${BASE_URL}/traffic/${id}`;
 
         /**
@@ -372,7 +372,7 @@
 
 
         function handleDOMContentLoaded() {
-            fetch(subscribeEndpoint)
+            fetch(subscribeTrafficsEndpoint)
                 .then((res) => {
                     let buf = "";
                     let decoder = new TextDecoder();
