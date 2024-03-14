@@ -446,7 +446,7 @@ fn md_lang(content_type: &str) -> &str {
     }
 }
 
-fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {

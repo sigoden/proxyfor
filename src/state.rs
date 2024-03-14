@@ -3,6 +3,7 @@ use crate::traffic::{Body, Traffic};
 use indexmap::IndexMap;
 use serde::Serialize;
 use std::sync::Mutex;
+use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite;
 
@@ -94,6 +95,7 @@ impl State {
             _ => return,
         };
         let message = WebsocketMessage::Data(WebsocketData {
+            create: OffsetDateTime::now_utc(),
             server_to_client,
             body,
         });
@@ -139,12 +141,16 @@ impl Head {
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum WebsocketMessage {
+    #[serde(rename = "error")]
     Error(String),
+    #[serde(rename = "data")]
     Data(WebsocketData),
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct WebsocketData {
+    #[serde(serialize_with = "crate::traffic::serialize_datetime")]
+    create: OffsetDateTime,
     server_to_client: bool,
     body: Body,
 }

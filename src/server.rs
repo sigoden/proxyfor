@@ -429,12 +429,12 @@ impl Server {
         let server = self.clone();
         tokio::spawn(async move {
             server
-                .handle_websocket_message(server_stream, client_sink, id, true)
+                .handle_websocket_message(server_stream, client_sink, id, false)
                 .await
         });
 
         tokio::spawn(async move {
-            self.handle_websocket_message(client_stream, server_sink, id, false)
+            self.handle_websocket_message(client_stream, server_sink, id, true)
                 .await
         });
 
@@ -456,24 +456,25 @@ impl Server {
                 Ok(message) => {
                     self.state
                         .add_websocket_message(id, &message, server_to_client);
-                    match sink.send(message).await {
-                        Err(tungstenite::Error::ConnectionClosed) => (),
-                        Err(err) => {
+                    if let Err(err) = sink.send(message).await {
+                        if !ignore_tungstenite_error(&err) {
                             self.state
-                                .add_websocket_error(id, format!("Websocket send error: {err}"));
+                                .add_websocket_error(id, format!("Websocket close error: {err}"))
                         }
-                        _ => (),
                     }
                 }
                 Err(err) => {
-                    self.state
-                        .add_websocket_error(id, format!("Websocket message error: {err}"));
-                    match sink.send(tungstenite::Message::Close(None)).await {
-                        Err(tungstenite::Error::ConnectionClosed) => (),
-                        Err(err) => self
-                            .state
-                            .add_websocket_error(id, format!("Websocket close error: {err}")),
-                        _ => (),
+                    if ignore_tungstenite_error(&err) {
+                        self.state.add_websocket_error(id, "Closed".to_string());
+                    } else {
+                        self.state
+                            .add_websocket_error(id, format!("Websocket message error: {err}"));
+                    }
+                    if let Err(err) = sink.send(tungstenite::Message::Close(None)).await {
+                        if !ignore_tungstenite_error(&err) {
+                            self.state
+                                .add_websocket_error(id, format!("Websocket close error: {err}"))
+                        }
                     };
 
                     break;
@@ -726,6 +727,17 @@ fn ndjson_frame<T: Serialize>(head: &T) -> Frame<Bytes> {
         Err(_) => String::new(),
     };
     Frame::data(Bytes::from(data))
+}
+
+fn ignore_tungstenite_error(err: &tungstenite::Error) -> bool {
+    matches!(
+        err,
+        tungstenite::Error::ConnectionClosed
+            | tungstenite::Error::AlreadyClosed
+            | tungstenite::Error::Protocol(
+                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+            )
+    )
 }
 
 async fn decompress(data: &Bytes, encoding: &str) -> Option<Vec<u8>> {
