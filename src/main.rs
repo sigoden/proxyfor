@@ -36,8 +36,13 @@ async fn main() -> Result<()> {
         parse_addr(&cli.listen).ok_or_else(|| anyhow!("Invalid addr '{}'", cli.listen))?;
     let running = Arc::new(AtomicBool::new(true));
     let reverse_proxy_url = cli.reverse_proxy_url.map(|url| {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
+        let url = if !url.starts_with("http://") && !url.starts_with("https://") {
             format!("http://{}", url)
+        } else {
+            url
+        };
+        if let Some(url) = url.strip_suffix('/') {
+            url.to_string()
         } else {
             url
         }
@@ -58,7 +63,7 @@ async fn main() -> Result<()> {
     eprintln!("HTTP(S) proxy listening at {}:{}", ip, port);
     if cli.web {
         eprintln!(
-            "Web inteface accessible at http://{}:{}{}/",
+            "Web interface accessible at http://{}:{}{}/",
             ip, port, WEB_PREFIX
         );
     }

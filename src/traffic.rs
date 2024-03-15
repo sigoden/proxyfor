@@ -19,6 +19,7 @@ pub struct Traffic {
     pub res_headers: Option<Headers>,
     pub res_version: Option<String>,
     pub res_body: Option<Body>,
+    pub websocket_id: Option<usize>,
     pub error: Option<String>,
 }
 
@@ -35,13 +36,17 @@ impl Traffic {
             res_version: None,
             res_headers: None,
             res_body: None,
+            websocket_id: None,
             error: None,
         }
     }
 
     pub fn add_error(&mut self, error: String) {
         match self.error.as_mut() {
-            Some(current_error) => current_error.push_str(&error),
+            Some(current_error) => {
+                current_error.push('\n');
+                current_error.push_str(&error);
+            }
             None => {
                 self.error = Some(error);
             }
@@ -207,7 +212,7 @@ pub struct Body {
 }
 
 impl Body {
-    pub fn new(bytes: &[u8]) -> Self {
+    pub fn bytes(bytes: &[u8]) -> Self {
         match std::str::from_utf8(bytes) {
             Ok(value) => Body {
                 encode: "utf8".to_string(),
@@ -217,6 +222,13 @@ impl Body {
                 encode: "base64".to_string(),
                 value: STANDARD.encode(bytes),
             },
+        }
+    }
+
+    pub fn text(value: &str) -> Self {
+        Body {
+            encode: "utf8".to_string(),
+            value: value.to_string(),
         }
     }
 
@@ -387,7 +399,7 @@ fn har_res_cookies(headers: &Option<Headers>) -> Value {
                         if let Ok(datetime) =
                             datetime.format(&time::format_description::well_known::Rfc3339)
                         {
-                            json_cookie["expries"] = datetime.into();
+                            json_cookie["expires"] = datetime.into();
                         }
                     }
                     if let Some(value) = cookie.http_only() {
@@ -434,7 +446,7 @@ fn md_lang(content_type: &str) -> &str {
     }
 }
 
-fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
 {
@@ -459,7 +471,7 @@ mod tests {
                 Header::new("cookie", "c1=1; c2=2"),
                 Header::new("cookie", "c3=3"),
             ]),
-            req_body: Some(Body::new(b"req_body")),
+            req_body: Some(Body::bytes(b"req_body")),
             status: Some(200),
             res_version: None,
             res_headers: Some(vec![
@@ -473,7 +485,8 @@ mod tests {
                     "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
                 ),
             ]),
-            res_body: Some(Body::new(r#"{"message":"OK"}"#.as_bytes())),
+            res_body: Some(Body::bytes(r#"{"message":"OK"}"#.as_bytes())),
+            websocket_id: None,
             error: Some("error".to_string()),
         }
     }
@@ -595,14 +608,14 @@ ERROR: error"#;
               "value": "1",
               "path": "/",
               "domain": "example.com",
-              "expries": "2015-10-21T07:28:00Z"
+              "expires": "2015-10-21T07:28:00Z"
             },
             {
               "name": "sc2",
               "value": "2",
               "path": "/",
               "domain": "example.com",
-              "expries": "2015-10-21T07:28:00Z"
+              "expires": "2015-10-21T07:28:00Z"
             }
           ],
           "headers": [
@@ -648,7 +661,7 @@ ERROR: error"#;
 
     #[test]
     fn test_render_body() {
-        let body = Body::new(&[
+        let body = Body::bytes(&[
             0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
             0x0f, 0x83,
         ]);
@@ -670,7 +683,7 @@ data:application/octet-stream;base64,a04aw68D0h5+c7rIvYQPgw==
 
     #[test]
     fn test_render_body_print() {
-        let body = Body::new(&[
+        let body = Body::bytes(&[
             0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
             0x0f, 0x83,
         ]);

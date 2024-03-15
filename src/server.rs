@@ -9,7 +9,7 @@ use crate::{
 use anyhow::{anyhow, Result};
 use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
 use bytes::Bytes;
-use futures_util::{stream, StreamExt, TryStreamExt};
+use futures_util::{stream, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use http::{
     header::{
         CACHE_CONTROL, CONNECTION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
@@ -20,12 +20,14 @@ use http::{
 };
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
-    body::{Frame, Incoming},
+    body::{Body, Frame, Incoming},
     header::{CONTENT_ENCODING, HOST},
     service::service_fn,
+    upgrade::Upgraded,
     Method, StatusCode, Uri,
 };
 use hyper_rustls::HttpsConnectorBuilder;
+use hyper_tungstenite::WebSocketStream;
 use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
@@ -38,6 +40,7 @@ use tokio::{
 };
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::BroadcastStream;
+use tokio_tungstenite::tungstenite;
 
 const WEB_INDEX: &str = include_str!("../assets/index.html");
 const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
@@ -60,41 +63,36 @@ pub(crate) struct Server {
 
 impl Server {
     pub(crate) async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
-        let mut res = Response::default();
-
         let req_uri = req.uri().to_string();
         let req_headers = req.headers().clone();
         let method = req.method().clone();
 
-        let url = if !req_uri.starts_with('/') || req_uri.starts_with(WEB_PREFIX) {
+        let uri = if !req_uri.starts_with('/') || req_uri.starts_with(WEB_PREFIX) {
             req_uri.clone()
         } else if let Some(base_url) = &self.reverse_proxy_url {
-            if req_uri == "/" {
-                base_url.clone()
-            } else {
-                format!("{base_url}{req_uri}")
-            }
+            format!("{base_url}{req_uri}")
         } else {
             let mut recorder = Recorder::new(&req_uri, method.as_str());
             if self.web {
                 recorder.change_print_mode(PrintMode::Oneline);
             }
-            self.internal_server_error(&mut res, "No reserver proxy url", recorder);
-            return Ok(res);
+            return self.internal_server_error("No reserver proxy url", recorder);
         };
 
-        let path = match url.split_once('?') {
+        let path = match uri.split_once('?') {
             Some((v, _)) => v,
-            None => url.as_str(),
+            None => uri.as_str(),
         };
 
         if let Some(path) = path.strip_prefix(CERT_PREFIX) {
+            let mut res = Response::default();
             if let Err(err) = self.handle_cert_index(&mut res, path).await {
                 *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                 set_res_body(&mut res, err.to_string());
             };
             return Ok(res);
         } else if let Some(path) = path.strip_prefix(WEB_PREFIX) {
+            let mut res = Response::default();
             if !self.web {
                 *res.status_mut() = StatusCode::BAD_REQUEST;
                 set_res_body(
@@ -110,13 +108,15 @@ impl Server {
             set_cors_header(&mut res);
             let ret = if path.is_empty() || path == "/" {
                 self.handle_web_index(&mut res).await
-            } else if path == "/subscribe" {
-                self.handle_subscribe(&mut res).await
+            } else if path == "/subscribe/traffics" {
+                self.handle_subscribe_traffics(&mut res).await
             } else if path == "/traffics" {
                 self.handle_list_traffics(&mut res).await
             } else if let Some(id) = path.strip_prefix("/traffic/") {
                 let query = req.uri().query().unwrap_or_default();
                 self.handle_get_traffic(&mut res, id, query).await
+            } else if let Some(id) = path.strip_prefix("/subscribe/websocket/") {
+                self.handle_subscribe_websocket(&mut res, id).await
             } else {
                 *res.status_mut() = StatusCode::NOT_FOUND;
                 return Ok(res);
@@ -136,7 +136,7 @@ impl Server {
         let req_version = req.version();
         recorder.set_req_version(&req_version);
 
-        recorder.check_match(is_match_title(&self.filters, &format!("{method} {url}")));
+        recorder.check_match(is_match_title(&self.filters, &format!("{method} {uri}")));
 
         if method == Method::CONNECT {
             recorder.check_match(!self.filters.is_empty() || !self.mime_filters.is_empty());
@@ -145,18 +145,22 @@ impl Server {
 
         recorder.set_req_headers(&req_headers);
 
+        if hyper_tungstenite::is_upgrade_request(&req) {
+            let uri: Uri = uri.parse().expect("Invalid uri");
+            return self.handle_upgrade_websocket(req, uri, recorder).await;
+        }
+
         let req_body = match req.collect().await {
             Ok(v) => v.to_bytes(),
             Err(err) => {
-                self.internal_server_error(&mut res, err, recorder);
-                return Ok(res);
+                return self.internal_server_error(err, recorder);
             }
         };
 
         recorder.set_req_body(&req_body);
 
         let mut builder = hyper::Request::builder()
-            .uri(&url)
+            .uri(&uri)
             .method(method.clone())
             .version(req_version);
         for (key, value) in req_headers.iter() {
@@ -169,13 +173,12 @@ impl Server {
         let proxy_req = match builder.body(Full::new(req_body)) {
             Ok(v) => v,
             Err(err) => {
-                self.internal_server_error(&mut res, err, recorder);
-                return Ok(res);
+                return self.internal_server_error(err, recorder);
             }
         };
 
         let builder = Client::builder(TokioExecutor::new());
-        let proxy_res = if url.starts_with("https://") {
+        let proxy_res = if uri.starts_with("https://") {
             builder
                 .build(
                     HttpsConnectorBuilder::new()
@@ -189,62 +192,15 @@ impl Server {
         } else {
             builder.build(HttpConnector::new()).request(proxy_req).await
         };
+
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                self.internal_server_error(&mut res, err, recorder);
-                return Ok(res);
+                return self.internal_server_error(err, recorder);
             }
         };
 
-        let proxy_res_status = proxy_res.status();
-        let proxy_res_headers = proxy_res.headers().clone();
-
-        if let Some(header_value) = proxy_res_headers
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-        {
-            recorder.check_match(is_match_type(&self.mime_filters, header_value));
-        }
-
-        *res.status_mut() = proxy_res_status;
-        let mut encoding = "";
-        for (key, value) in proxy_res_headers.iter() {
-            if key == CONTENT_ENCODING {
-                if let Ok(value) = value.to_str() {
-                    encoding = value;
-                }
-            }
-            res.headers_mut().insert(key.clone(), value.clone());
-        }
-
-        recorder
-            .set_res_status(proxy_res_status)
-            .set_res_version(&proxy_res.version())
-            .set_res_headers(&proxy_res_headers);
-
-        let proxy_res_body = match proxy_res.collect().await {
-            Ok(v) => v.to_bytes(),
-            Err(err) => {
-                self.internal_server_error(&mut res, err, recorder);
-                return Ok(res);
-            }
-        };
-
-        if !proxy_res_body.is_empty() && recorder.is_valid() {
-            let decompress_body = decompress(&proxy_res_body, encoding)
-                .await
-                .unwrap_or_else(|| proxy_res_body.to_vec());
-            recorder.set_res_body(&decompress_body);
-        }
-
-        self.take_recorder(recorder);
-
-        *res.body_mut() = Full::new(proxy_res_body)
-            .map_err(|err| anyhow!("{err}"))
-            .boxed();
-
-        Ok(res)
+        self.process_proxy_res(proxy_res, recorder).await
     }
 
     async fn handle_cert_index(&self, res: &mut Response, path: &str) -> Result<()> {
@@ -282,8 +238,8 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_subscribe(&self, res: &mut Response) -> Result<()> {
-        let (init_data, receiver) = (self.state.list(), self.state.subscribe());
+    async fn handle_subscribe_traffics(&self, res: &mut Response) -> Result<()> {
+        let (init_data, receiver) = (self.state.list(), self.state.subscribe_traffics());
         let stream = BroadcastStream::new(receiver);
         let stream = stream
             .map_ok(|head| ndjson_frame(&head))
@@ -345,6 +301,188 @@ impl Server {
         Ok(())
     }
 
+    async fn handle_subscribe_websocket(&self, res: &mut Response, id: &str) -> Result<()> {
+        let Ok(id) = id.parse() else {
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            return Ok(());
+        };
+
+        let Some((messages, receiver)) = self.state.subscribe_websocket(id) else {
+            *res.status_mut() = StatusCode::NOT_FOUND;
+            return Ok(());
+        };
+
+        let stream = BroadcastStream::new(receiver);
+        let stream = stream.filter_map(move |v| async move {
+            match v {
+                Ok((id_, message)) => {
+                    if id_ != id {
+                        None
+                    } else {
+                        Some(Ok(ndjson_frame(&message)))
+                    }
+                }
+                Err(err) => Some(Err(anyhow!("{err}"))),
+            }
+        });
+
+        let body = if messages.is_empty() {
+            BodyExt::boxed(StreamBody::new(stream))
+        } else {
+            let init_stream = stream::iter(
+                messages
+                    .into_iter()
+                    .map(|message| Ok(ndjson_frame(&message))),
+            );
+            let combined_stream = init_stream.chain(stream);
+            BodyExt::boxed(StreamBody::new(combined_stream))
+        };
+        *res.body_mut() = body;
+        res.headers_mut().insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-ndjson; charset=UTF-8"),
+        );
+        res.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        Ok(())
+    }
+
+    async fn handle_upgrade_websocket(
+        self: Arc<Self>,
+        req: Request,
+        uri: Uri,
+        mut recorder: Recorder,
+    ) -> Result<Response, hyper::Error> {
+        let mut req = {
+            let (mut parts, _) = req.into_parts();
+
+            parts.uri = {
+                let mut parts = uri.into_parts();
+
+                parts.scheme = if parts.scheme.unwrap_or(Scheme::HTTP) == Scheme::HTTP {
+                    Some("ws".try_into().expect("Failed to convert scheme"))
+                } else {
+                    Some("wss".try_into().expect("Failed to convert scheme"))
+                };
+
+                match Uri::from_parts(parts) {
+                    Ok(uri) => uri,
+                    Err(err) => {
+                        return self.internal_server_error(format!("Invalid uri, {err}"), recorder);
+                    }
+                }
+            };
+
+            hyper::Request::from_parts(parts, ())
+        };
+
+        match hyper_tungstenite::upgrade(&mut req, None) {
+            Ok((proxy_res, websocket)) => {
+                let Some(id) = self.state.new_websocket() else {
+                    return self.internal_server_error(
+                        "Failed to record the websocket".to_string(),
+                        recorder,
+                    );
+                };
+                recorder.set_websocket_id(id);
+
+                let server = self.clone();
+                let fut = async move {
+                    match websocket.await {
+                        Ok(ws) => {
+                            let server_cloned = server.clone();
+                            if let Err(err) = server_cloned.handle_websocket(ws, req, id).await {
+                                server.state.add_websocket_error(
+                                    id,
+                                    format!("Failed to handle WebSocket: {}", err),
+                                );
+                            }
+                        }
+                        Err(err) => {
+                            server.state.add_websocket_error(
+                                id,
+                                format!("Failed to upgrade to WebSocket: {}", err),
+                            );
+                        }
+                    }
+                };
+
+                tokio::spawn(fut);
+                self.process_proxy_res(proxy_res, recorder).await
+            }
+            Err(err) => self
+                .internal_server_error(format!("Failed to upgrade to websocket, {err}"), recorder),
+        }
+    }
+
+    async fn handle_websocket(
+        self: Arc<Self>,
+        client_to_server_socket: WebSocketStream<TokioIo<Upgraded>>,
+        req: hyper::Request<()>,
+        id: usize,
+    ) -> Result<()> {
+        let (server_to_client_socket, _) = tokio_tungstenite::connect_async(req).await?;
+
+        let (to_client_sink, from_client_stream) = client_to_server_socket.split();
+        let (to_server_sink, from_server_stream) = server_to_client_socket.split();
+
+        let server = self.clone();
+        tokio::spawn(async move {
+            server
+                .handle_websocket_message(from_client_stream, to_server_sink, id, false)
+                .await
+        });
+
+        tokio::spawn(async move {
+            self.handle_websocket_message(from_server_stream, to_client_sink, id, true)
+                .await
+        });
+
+        Ok(())
+    }
+
+    async fn handle_websocket_message(
+        &self,
+        mut stream: impl Stream<Item = Result<tungstenite::Message, tungstenite::Error>>
+            + Unpin
+            + Send
+            + 'static,
+        mut sink: impl Sink<tungstenite::Message, Error = tungstenite::Error> + Unpin + Send + 'static,
+        id: usize,
+        server_to_client: bool,
+    ) {
+        while let Some(message) = stream.next().await {
+            match message {
+                Ok(message) => {
+                    self.state
+                        .add_websocket_message(id, &message, server_to_client);
+                    if let Err(err) = sink.send(message).await {
+                        if !ignore_tungstenite_error(&err) {
+                            self.state
+                                .add_websocket_error(id, format!("Websocket close error: {err}"))
+                        }
+                    }
+                }
+                Err(err) => {
+                    if ignore_tungstenite_error(&err) {
+                        self.state.add_websocket_error(id, "Closed".to_string());
+                    } else {
+                        self.state
+                            .add_websocket_error(id, format!("Websocket message error: {err}"));
+                    }
+                    if let Err(err) = sink.send(tungstenite::Message::Close(None)).await {
+                        if !ignore_tungstenite_error(&err) {
+                            self.state
+                                .add_websocket_error(id, format!("Websocket close error: {err}"))
+                        }
+                    };
+
+                    break;
+                }
+            }
+        }
+    }
+
     fn handle_connect(
         self: Arc<Self>,
         mut req: Request,
@@ -367,9 +505,10 @@ impl Server {
                     let mut buffer = [0; 4];
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
-                        Err(e) => {
-                            recorder
-                                .add_error(format!("Failed to read from upgraded connection: {e}"));
+                        Err(err) => {
+                            recorder.add_error(format!(
+                                "Failed to read from upgraded connection: {err}"
+                            ));
                             return;
                         }
                     };
@@ -380,36 +519,40 @@ impl Server {
                     );
 
                     if buffer == *b"GET " {
-                        if let Err(e) = self
+                        if let Err(err) = self
                             .serve_connect_stream(upgraded, Scheme::HTTP, authority)
                             .await
                         {
-                            recorder.add_error(format!("Websocket connect error: {e}"));
+                            recorder.add_error(format!("Websocket connect error: {err}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let server_config = match self.ca.gen_server_config(&authority).await {
                             Ok(server_config) => server_config,
-                            Err(e) => {
-                                recorder.add_error(format!("Failed to build server config: {e}"));
+                            Err(err) => {
+                                recorder.add_error(format!("Failed to build server config: {err}"));
                                 return;
                             }
                         };
 
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
-                            Err(e) => {
-                                recorder
-                                    .add_error(format!("Failed to establish TLS Connection: {e}"));
+                            Err(err) => {
+                                recorder.add_error(format!(
+                                    "Failed to establish TLS Connection: {err}"
+                                ));
                                 return;
                             }
                         };
 
-                        if let Err(e) = self
+                        if let Err(err) = self
                             .serve_connect_stream(stream, Scheme::HTTPS, authority)
                             .await
                         {
-                            if !e.to_string().starts_with("error shutting down connection") {
-                                recorder.add_error(format!("HTTPS connect error: {e}"));
+                            if !err
+                                .to_string()
+                                .starts_with("error shutting down connection")
+                            {
+                                recorder.add_error(format!("HTTPS connect error: {err}"));
                             }
                         }
                     } else {
@@ -420,25 +563,25 @@ impl Server {
 
                         let mut server = match TcpStream::connect(authority.as_str()).await {
                             Ok(server) => server,
-                            Err(e) => {
+                            Err(err) => {
                                 recorder
-                                    .add_error(format! {"Failed to connect to {authority}: {e}"});
+                                    .add_error(format! {"Failed to connect to {authority}: {err}"});
                                 return;
                             }
                         };
 
-                        if let Err(e) =
+                        if let Err(err) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
                             recorder.add_error(format!(
                                 "Failed to tunnel unknown protocol to {}: {}",
-                                authority, e
+                                authority, err
                             ));
                         }
                     }
                 }
-                Err(e) => {
-                    recorder.add_error(format!("Upgrade error: {e}"));
+                Err(err) => {
+                    recorder.add_error(format!("Upgrade error: {err}"));
                 }
             };
         };
@@ -479,6 +622,62 @@ impl Server {
             .await
     }
 
+    async fn process_proxy_res<T: Body<Error = E>, E: std::error::Error>(
+        &self,
+        proxy_res: hyper::Response<T>,
+        mut recorder: Recorder,
+    ) -> Result<Response, hyper::Error> {
+        let proxy_res_version = proxy_res.version();
+        let proxy_res_status = proxy_res.status();
+        let proxy_res_headers = proxy_res.headers().clone();
+
+        if let Some(header_value) = proxy_res_headers
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+        {
+            recorder.check_match(is_match_type(&self.mime_filters, header_value));
+        }
+
+        let proxy_res_body = match proxy_res.collect().await {
+            Ok(v) => v.to_bytes(),
+            Err(err) => {
+                return self.internal_server_error(err, recorder);
+            }
+        };
+
+        let mut res = Response::default();
+        let mut encoding = "";
+        for (key, value) in proxy_res_headers.iter() {
+            if key == CONTENT_ENCODING {
+                if let Ok(value) = value.to_str() {
+                    encoding = value;
+                }
+            }
+            res.headers_mut().insert(key.clone(), value.clone());
+        }
+
+        recorder
+            .set_res_status(proxy_res_status)
+            .set_res_version(&proxy_res_version)
+            .set_res_headers(&proxy_res_headers);
+
+        if !proxy_res_body.is_empty() && recorder.is_valid() {
+            let decompress_body = decompress(&proxy_res_body, encoding)
+                .await
+                .unwrap_or_else(|| proxy_res_body.to_vec());
+            recorder.set_res_body(&decompress_body);
+        }
+
+        *res.status_mut() = proxy_res_status;
+        *res.body_mut() = Full::new(proxy_res_body)
+            .map_err(|err| anyhow!("{err}"))
+            .boxed();
+
+        self.take_recorder(recorder);
+
+        Ok(res)
+    }
+
     fn take_recorder(&self, recorder: Recorder) {
         if recorder.is_valid() {
             recorder.print();
@@ -488,13 +687,14 @@ impl Server {
 
     fn internal_server_error<T: std::fmt::Display>(
         &self,
-        res: &mut Response,
         error: T,
         mut recorder: Recorder,
-    ) {
+    ) -> Result<Response, hyper::Error> {
+        let mut res = Response::default();
         recorder.add_error(error.to_string());
         self.take_recorder(recorder);
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+        Ok(res)
     }
 }
 
@@ -527,6 +727,17 @@ fn ndjson_frame<T: Serialize>(head: &T) -> Frame<Bytes> {
         Err(_) => String::new(),
     };
     Frame::data(Bytes::from(data))
+}
+
+fn ignore_tungstenite_error(err: &tungstenite::Error) -> bool {
+    matches!(
+        err,
+        tungstenite::Error::ConnectionClosed
+            | tungstenite::Error::AlreadyClosed
+            | tungstenite::Error::Protocol(
+                tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
+            )
+    )
 }
 
 async fn decompress(data: &Bytes, encoding: &str) -> Option<Vec<u8>> {

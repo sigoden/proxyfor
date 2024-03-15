@@ -28,16 +28,16 @@
 
         .left-panel,
         .right-panel {
+            display: flex;
+            flex-direction: column;
             flex: 1;
             border: 1px solid #ccc;
             width: 100%;
-            overflow-y: scroll;
-            overflow-x: hidden;
         }
 
-        .right-panel {
-            display: flex;
-            flex-direction: column;
+        .left-panel {
+            overflow-y: auto;
+            overflow-x: hidden;
         }
 
         .tabs {
@@ -146,12 +146,14 @@
             width: 60px;
         }
 
-        .traffic-view {
+        .main-view {
             flex: 1;
             border: 1px solid #ccc;
             border-top: none;
             padding: 10px;
             overflow-wrap: break-word;
+            overflow-x: hidden;
+            overflow-y: auto;
         }
 
         .firstline {
@@ -205,9 +207,23 @@
             background-color: #fcf8e3;
             border-color: #faebcc;
         }
+
+        .ws-date {
+            float: right;
+            font-size: 85%;
+        }
+
+        .ws-recv {
+            color: #a94442;
+        }
+
+        .ws-send {
+            color: #337ab7;
+        }
     </style>
     <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
     <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
+    <script src="https://unpkg.com/sanitize-html@1.20.1/dist/sanitize-html.min.js"></script>
 </head>
 
 <body>
@@ -228,6 +244,7 @@
         <div class="tabs">
             <div data-tab="req" class="tab active">Request</div>
             <div data-tab="res" class="tab">Response</div>
+            <div data-tab="ws" class="tab hidden">Websocket</div>
             <div data-tab="err" class="tab hidden">Error</div>
             <div class="toolbox">
                 <div class="dropdown copy-dropdown">
@@ -241,7 +258,7 @@
                 </div>
             </div>
         </div>
-        <div class="traffic-view"></div>
+        <div class="main-view"></div>
     </div>
     <script>
 
@@ -256,6 +273,7 @@
          * @property {?Header[]} res_headers
          * @property {?string} res_version
          * @property {?BodyData} res_body
+         * @property {?number} websocket_id
          * @property {?string} error
          */
 
@@ -273,6 +291,19 @@
 
         /**
          * @typedef {"markdown"|"curl"|"har"|"res-body"} CopyKind
+         */
+
+        /**
+         * @typedef {Object} WebsocketMessage
+         * @property {?string} error
+         * @property {?WebsocketData} data
+         */
+
+        /**
+         * @typedef {Object} WebsocketData
+         * @property {create} string
+         * @property {bool} server_to_client
+         * @property {BodyData} body
          */
 
         const STATUS_CODES = {
@@ -329,8 +360,9 @@
 
         const BASE_URL = "/__proxyfor__";
 
-        const subscribeEndpoint = `${BASE_URL}/subscribe`;
+        const subscribeTrafficsEndpoint = `${BASE_URL}/subscribe/traffics`;
         const getTrafficEndpoint = id => `${BASE_URL}/traffic/${id}`;
+        const subscribeWebsocketEndpoint = id => `${BASE_URL}/subscribe/websocket/${id}`;
 
         /**
          * @type {HTMLTableElement}
@@ -343,7 +375,7 @@
         /**
          * @type {HTMLDivElement}
          */
-        const $trafficView = document.querySelector(".traffic-view");
+        const $mainView = document.querySelector(".main-view");
 
         /**
          * @type {HTMLButtonElement}
@@ -354,6 +386,11 @@
          * @type {HTMLDivElement}
          */
         const $copyDropdownContent = document.querySelector(".copy-dropdown .dropdown-content");
+
+        /**
+         * @type {AbortController}
+         */
+        let websocketAbortController = new AbortController();
 
         /**
          * @type {number}
@@ -372,7 +409,7 @@
 
 
         function handleDOMContentLoaded() {
-            fetch(subscribeEndpoint)
+            fetch(subscribeTrafficsEndpoint)
                 .then((res) => {
                     let buf = "";
                     let decoder = new TextDecoder();
@@ -396,7 +433,7 @@
                     });
                 })
                 .catch((err) => {
-                    console.error("Failed to subscribe", err);
+                    console.error("Failed to subscribe traffics", err);
                 });
 
             $trafficTableBody.addEventListener("click", (e) => {
@@ -424,9 +461,9 @@
                     if (kind) handleCopy(kind);
                 }
             });
-            document.addEventListener("click", function(e) {
+            document.addEventListener("click", function (e) {
                 if (!e.target.closest(".dropdown")) {
-                    $copyDropdownContent.style.display = "none"
+                    $copyDropdownContent.style.display = "none";
                 }
             });
         }
@@ -449,7 +486,7 @@
                         currentTraffic = null;
                         console.error(`Failed to fetch traffic ${id}`, err);
                     })
-                    .finally(updateTabContent)
+                    .finally(updateTabContent);
             }
         }
 
@@ -480,7 +517,7 @@
             }
             if (kind == "res-body") {
                 if (currentTraffic.res_body) {
-                    let text = ""
+                    let text = "";
                     if (currentTraffic.res_body.encode == "base64") {
                         let contentType = getContentType(currentTraffic.res_headers);
                         text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
@@ -505,34 +542,98 @@
         }
 
         function updateTabContent() {
-            let innerHTML = ""
+            let innerHTML = "";
+
+            if (!websocketAbortController.signal.aborted) {
+                websocketAbortController.abort();
+            }
+            websocketAbortController = new AbortController();
+
             if (currentTraffic) {
                 if (selectedTab === "req") {
                     innerHTML = tmplTrafficReq(currentTraffic);
                 } else if (selectedTab == "res") {
                     if (currentTraffic.error) {
-                        handleSelectedTab("err")
-                        return
+                        handleSelectedTab("err");
+                        return;
                     } else {
                         innerHTML = tmplTrafficRes(currentTraffic);
+                    }
+                } else if (selectedTab == "ws") {
+                    if (currentTraffic.websocket_id) {
+                        handleSubscribeWebsocket(currentTraffic.websocket_id);
+                    } else {
+                        handleSelectedTab("res");
+                        return;
                     }
                 } else if (selectedTab == "err") {
                     if (currentTraffic.error) {
                         innerHTML = tmplError(currentTraffic.error);
                     } else {
-                        handleSelectedTab("res")
-                        return
+                        handleSelectedTab("res");
+                        return;
                     }
                 }
             }
             if (currentTraffic?.error) {
                 $tabs.querySelector(".tab[data-tab='res']").classList.add("hidden");
+                $tabs.querySelector(".tab[data-tab='ws']").classList.add("hidden");
                 $tabs.querySelector(".tab[data-tab='err']").classList.remove("hidden");
+            } else if (currentTraffic?.websocket_id) {
+                $tabs.querySelector(".tab[data-tab='res']").classList.remove("hidden");
+                $tabs.querySelector(".tab[data-tab='ws']").classList.remove("hidden");
+                $tabs.querySelector(".tab[data-tab='err']").classList.add("hidden");
             } else {
                 $tabs.querySelector(".tab[data-tab='res']").classList.remove("hidden");
+                $tabs.querySelector(".tab[data-tab='ws']").classList.add("hidden");
                 $tabs.querySelector(".tab[data-tab='err']").classList.add("hidden");
             }
-            $trafficView.innerHTML = innerHTML;
+            $mainView.innerHTML = innerHTML;
+        }
+
+        function handleSubscribeWebsocket(id) {
+            fetch(subscribeWebsocketEndpoint(id), { signal: websocketAbortController.signal })
+                .then((res) => {
+                    let buf = "";
+                    let decoder = new TextDecoder();
+                    let reader = res.body.getReader();
+                    reader.read().then(function handleNDJson({ value, done }) {
+                        if (done) {
+                            buf = buf.trim();
+                        } else {
+                            let data = decoder.decode(value, { stream: true });
+                            buf += data;
+                        }
+                        let lines = buf.split("\n");
+                        for (let i = 0; i < lines.length - 1; i++) {
+                            try {
+                                const message = JSON.parse(lines[i]);
+                                handleNewWebsocketMessage(message);
+                            } catch { }
+                        }
+                        buf = lines[lines.length - 1];
+                        return reader.read().then(handleNDJson);
+                    });
+                })
+                .catch((err) => {
+                    if (err.name === "AbortError") {
+                        return;
+                    }
+                    console.error(`Failed to subscribe websocket ${id}`, err);
+                });
+        }
+
+        /**
+         * @param {WebsocketMessage} message
+         */
+        function handleNewWebsocketMessage(message) {
+            let tmpl = '';
+            if (message.error) {
+                tmpl = tmplError(message.error);
+            } else if (message.data) {
+                tmpl = tmplWebsocketData(message.data);
+            }
+            $mainView.insertAdjacentHTML("beforeend", tmpl);
         }
 
         function tmplTrafficTableRow(id, uri, method, status) {
@@ -541,7 +642,7 @@
                 <td class="col-uri">${uri}</td>
                 <td class="col-method">${method}</td>
                 <td class="col-status">${status || ""}</td>
-            </tr>`
+            </tr>`;
         }
 
         /**
@@ -570,7 +671,7 @@
          * @param {?Header[]} headers
          */
         function tmplHaders(headers) {
-            return (headers || []).map(({name, value}) =>
+            return (headers || []).map(({ name, value }) =>
                 `<div class="header-line"><span class="header-key">${name}</span>:&nbsp;<span class="header-value">${value}</span></div>`
             ).join("");
         }
@@ -584,6 +685,7 @@
             let { encode, value } = body;
             let contentType = getContentType(headers);
             if (encode == "utf8") {
+                value = sanitizeHtml(value);
                 let language = highlightLanguage(contentType);
                 const highlightedCode = hljs.getLanguage(language)
                     ? hljs.highlight(value, { language }).value
@@ -606,7 +708,7 @@
                         filename = disposition.match(/filename="(.*?)"/)[1] || filename;
                     }
                     let downloadUrl = URL.createObjectURL(base64ToBlob(value, contentType || "application/octet-stream"));
-                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`
+                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`;
                 }
             }
             return `<div class="code-view">${value}</div>`;
@@ -614,7 +716,32 @@
 
         function tmplError(error) {
             if (!error) return "";
-            return `<div class="error-view">${error}</div>`
+            return `<div class="error-view">${error}</div>`;
+        }
+
+        /**
+         * @param {WebsocketData} data
+         */
+        function tmplWebsocketData(data) {
+            let arrow = '';
+            if (data.server_to_client) {
+                arrow = '<i class="ws-recv">🠘</i>';
+            } else {
+                arrow = '<i class="ws-send">🠚</i>';
+            }
+            let date = formatDate(new Date(data.create));
+            let value = data.body.value;
+            if (data.body.encode == "base64") {
+                value = `data:;base64,${value}`;
+            } else {
+                value = sanitizeHtml(value);
+            }
+            return `<div class="ws-msg">
+                <small>${arrow}<span class="ws-date">${date}</span></small>
+                <div class="code-view">
+                    <pre><code>${value}</code></pre>
+                </div>
+            </div>`;
         }
 
         /**
@@ -628,7 +755,7 @@
          * @param {?Header[]} headers
          */
         function getHeader(headers, name) {
-            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || ""
+            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || "";
         }
 
         /** 
@@ -659,6 +786,25 @@
             }
 
             return new Blob(byteArrays, { type: contentType });
+
+        }
+
+        function formatDate(date) {
+            const year = date.getFullYear();
+            const month = date.getMonth() + 1; // months are 0-indexed
+            const day = date.getDate();
+            const hours = date.getHours();
+            const minutes = date.getMinutes();
+            const seconds = date.getSeconds();
+            const milliseconds = date.getMilliseconds();
+
+            const formattedMonth = month < 10 ? `0${month}` : month;
+            const formattedDay = day < 10 ? `0${day}` : day;
+            const formattedHours = hours < 10 ? `0${hours}` : hours;
+            const formattedMinutes = minutes < 10 ? `0${minutes}` : minutes;
+            const formattedSeconds = seconds < 10 ? `0${seconds}` : seconds;
+
+            return `${year}-${formattedMonth}-${formattedDay} ${formattedHours}:${formattedMinutes}:${formattedSeconds}.${milliseconds}`;
         }
 
         document.addEventListener("DOMContentLoaded", handleDOMContentLoaded);
