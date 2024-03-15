@@ -32,7 +32,7 @@
             flex-direction: column;
             flex: 1;
             border: 1px solid #ccc;
-            width: 100%;
+            width: 50%;
         }
 
         .left-panel {
@@ -223,7 +223,6 @@
     </style>
     <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
     <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
-    <script src="https://unpkg.com/sanitize-html@1.20.1/dist/sanitize-html.min.js"></script>
 </head>
 
 <body>
@@ -757,7 +756,6 @@
             let { encode, value } = body;
             let contentType = getContentType(headers);
             if (encode == "utf8") {
-                value = sanitizeHtml(value);
                 let language = highlightLanguage(contentType);
                 const highlightedCode = hljs.getLanguage(language)
                     ? hljs.highlight(value, { language }).value
@@ -780,7 +778,7 @@
                         filename = disposition.match(/filename="(.*?)"/)[1] || filename;
                     }
                     let downloadUrl = URL.createObjectURL(base64ToBlob(value, contentType || "application/octet-stream"));
-                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary body</a></div>`;
+                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download</a></div>`;
                 }
             }
             return `<div class="code-view">${value}</div>`;
@@ -805,8 +803,6 @@
             let value = data.body.value;
             if (data.body.encode == "base64") {
                 value = `data:;base64,${value}`;
-            } else {
-                value = sanitizeHtml(value);
             }
             return `<div class="ws-msg">
                 <small>${arrow}<span class="ws-date">${date}</span></small>

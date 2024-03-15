@@ -8,55 +8,62 @@ use rcgen::{
 };
 use rsa::pkcs8::EncodePrivateKey;
 use rsa::RsaPrivateKey;
-use std::{fs, io::Cursor, sync::Arc};
+use std::{fs, io::Cursor, path::Path, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
     pki_types::{CertificateDer, PrivateKeyDer},
     ServerConfig,
 };
 
-const CA_CERT_FILENAME: &str = "proxyfor-ca-cert.cer";
-const KEY_FILENAME: &str = "proxyfor-key.pem";
 const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
 const NOT_BEFORE_OFFSET: i64 = 60;
 
-pub fn load_ca() -> Result<CertificateAuthority> {
-    let mut config_dir = dirs::home_dir().ok_or_else(|| anyhow!("No home dir"))?;
-    config_dir.push(".proxyfor");
-    if !config_dir.exists() {
-        fs::create_dir_all(&config_dir)
-            .with_context(|| format!("Failed to create config dir '{}'", config_dir.display()))?;
-    }
-
-    let ca_file = config_dir.join(CA_CERT_FILENAME);
-    let key_file = config_dir.join(KEY_FILENAME);
-    let (key, ca_cert, ca_data) = if !ca_file.exists() {
+pub fn init_ca(ca_cert_file: &Path, private_key_file: &Path) -> Result<CertificateAuthority> {
+    let (private_key, ca_cert, ca_data) = if !ca_cert_file.exists() {
         let key = gen_private_key().with_context(|| "Failed to generate private key")?;
         let ca_cert = gen_ca_cert(&key).with_context(|| "Failed to generate CA certificate")?;
         let ca_data = ca_cert
             .serialize_pem()
             .with_context(|| "Failed to generate CA certificate")?;
-        fs::write(&ca_file, &ca_data)
-            .with_context(|| format!("Failed to save CA certificate to '{}'", ca_file.display()))?;
-        fs::write(&key_file, key.serialize_pem())
-            .with_context(|| format!("Failed to save private key to '{}'", key_file.display()))?;
+        fs::write(ca_cert_file, &ca_data).with_context(|| {
+            format!(
+                "Failed to save CA certificate to '{}'",
+                ca_cert_file.display()
+            )
+        })?;
+        fs::write(private_key_file, key.serialize_pem()).with_context(|| {
+            format!(
+                "Failed to save private key to '{}'",
+                private_key_file.display()
+            )
+        })?;
         (key, ca_cert, ca_data)
     } else {
-        let key_err = || format!("Failed to read private key at '{}'", key_file.display());
-        let key_data = fs::read_to_string(&key_file).with_context(key_err)?;
+        let key_err = || {
+            format!(
+                "Failed to read private key at '{}'",
+                private_key_file.display()
+            )
+        };
+        let key_data = fs::read_to_string(private_key_file).with_context(key_err)?;
         let key = KeyPair::from_pem(&key_data).with_context(key_err)?;
         let key_clone = KeyPair::from_pem(&key_data).with_context(key_err)?;
 
-        let ca_err = || format!("Failed to read CA certificate at '{}'", ca_file.display());
-        let ca_data = fs::read_to_string(&ca_file).with_context(ca_err)?;
+        let ca_err = || {
+            format!(
+                "Failed to read CA certificate at '{}'",
+                ca_cert_file.display()
+            )
+        };
+        let ca_data = fs::read_to_string(ca_cert_file).with_context(ca_err)?;
         let ca_params =
             CertificateParams::from_ca_cert_pem(&ca_data, key_clone).with_context(ca_err)?;
         let ca_cert = Certificate::from_params(ca_params).with_context(ca_err)?;
         (key, ca_cert, ca_data)
     };
 
-    let mut key_reader = Cursor::new(key.serialize_pem());
+    let mut key_reader = Cursor::new(private_key.serialize_pem());
     let key_der = rustls_pemfile::read_one(&mut key_reader)
         .ok()
         .flatten()
@@ -68,7 +75,7 @@ pub fn load_ca() -> Result<CertificateAuthority> {
         })
         .ok_or_else(|| anyhow!("Invalid private key"))?;
 
-    let ca = CertificateAuthority::new(key, key_der, ca_cert, ca_data, 1_000);
+    let ca = CertificateAuthority::new(private_key, key_der, ca_cert, ca_data, 1_000);
     Ok(ca)
 }
 
@@ -127,7 +134,7 @@ impl CertificateAuthority {
         Ok(server_cfg)
     }
 
-    fn gen_cert(&self, authority: &Authority) -> Result<CertificateDer<'static>> {
+    pub fn gen_cert(&self, authority: &Authority) -> Result<CertificateDer<'static>> {
         let mut params = CertificateParams::default();
         params.serial_number = Some(thread_rng().gen::<u64>().into());
 

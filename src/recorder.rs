@@ -1,4 +1,7 @@
-use crate::traffic::{Body, Header, Headers, Traffic};
+use crate::{
+    server::PrintMode,
+    traffic::{Body, Header, Headers, Traffic},
+};
 
 use http::{HeaderMap, StatusCode, Version};
 
@@ -7,12 +10,6 @@ pub(crate) struct Recorder {
     traffic: Traffic,
     valid: bool,
     print_mode: PrintMode,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PrintMode {
-    Oneline,
-    Markdown,
 }
 
 impl Recorder {
@@ -83,7 +80,7 @@ impl Recorder {
         self
     }
 
-    pub(crate) fn change_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
+    pub(crate) fn set_print_mode(&mut self, print_mode: PrintMode) -> &mut Self {
         self.print_mode = print_mode;
         self
     }
@@ -98,6 +95,7 @@ impl Recorder {
 
     pub(crate) fn print(&self) {
         match self.print_mode {
+            PrintMode::Nothing => {}
             PrintMode::Oneline => {
                 println!("# {}", self.traffic.oneline());
             }
