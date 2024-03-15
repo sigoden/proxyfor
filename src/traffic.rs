@@ -92,6 +92,15 @@ impl Traffic {
     }
 
     pub fn har(&self) -> Value {
+        let entries = match self.har_entry() {
+            Some(v) => vec![v],
+            None => vec![],
+        };
+        wrap_entries(entries)
+    }
+
+    pub fn har_entry(&self) -> Option<Value> {
+        self.status?;
         let request = json!({
             "method": self.method,
             "url": self.uri,
@@ -103,47 +112,31 @@ impl Traffic {
             "headersSize": -1,
             "bodySize": -1,
         });
-        let response = match self.status {
-            Some(status) => json!({
-                "status": status,
-                "statusText": "",
-                "httpVersion": self.res_version,
-                "cookies": har_res_cookies(&self.res_headers),
-                "headers": har_headers(&self.res_headers),
-                "content": har_res_body(&self.res_body, &self.res_headers),
-                "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
-                "headersSize": -1,
-                "bodySize": -1,
-            }),
-            None => json!({}),
-        };
-        json!({
-            "log": {
-                "version": "1.2",
-                "creator": {
-                    "name": "proxyfor",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "comment": "",
-                },
-                "pages": [],
-                "entries": [
-                    {
-                        "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
-                        "time": -1,
-                        "request": request,
-                        "response": response,
-                        "cache": {},
-                        "timings": {
-                            "connect": -1,
-                            "ssl": -1,
-                            "send": -1,
-                            "receive": -1,
-                            "wait": -1
-                        }
-                    }
-                ]
+        let response = json!({
+            "status": self.status.unwrap_or_default(),
+            "statusText": "",
+            "httpVersion": self.res_version,
+            "cookies": har_res_cookies(&self.res_headers),
+            "headers": har_headers(&self.res_headers),
+            "content": har_res_body(&self.res_body, &self.res_headers),
+            "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
+            "headersSize": -1,
+            "bodySize": -1,
+        });
+        Some(json!({
+            "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
+            "time": -1,
+            "request": request,
+            "response": response,
+            "cache": {},
+            "timings": {
+                "connect": -1,
+                "ssl": -1,
+                "send": -1,
+                "receive": -1,
+                "wait": -1
             }
-        })
+        }))
     }
 
     pub fn curl(&self) -> String {
@@ -175,7 +168,7 @@ impl Traffic {
         output
     }
 
-    pub fn export<'a>(&'a self, format: &str) -> Result<(String, &'a str)> {
+    pub fn export(&self, format: &str) -> Result<(String, &'static str)> {
         match format {
             "markdown" => Ok((self.markdown(false), "text/markdown; charset=UTF-8")),
             "har" => Ok((
@@ -183,7 +176,11 @@ impl Traffic {
                 "application/json; charset=UTF-8",
             )),
             "curl" => Ok((self.curl(), "text/plain; charset=UTF-8")),
-            _ => bail!("unsupported format: {}", format),
+            "" => Ok((
+                serde_json::to_string_pretty(&self)?,
+                "application/json; charset=UTF-8",
+            )),
+            _ => bail!("Unsupported format: {}", format),
         }
     }
 }
@@ -444,6 +441,21 @@ fn md_lang(content_type: &str) -> &str {
     } else {
         ""
     }
+}
+
+pub(crate) fn wrap_entries(entries: Vec<Value>) -> Value {
+    json!({
+        "log": {
+            "version": "1.2",
+            "creator": {
+                "name": "proxyfor",
+                "version": env!("CARGO_PKG_VERSION"),
+                "comment": "",
+            },
+            "pages": [],
+            "entries": entries,
+        }
+    })
 }
 
 pub(crate) fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
