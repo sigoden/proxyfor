@@ -247,6 +247,14 @@
             <div data-tab="ws" class="tab hidden">Websocket</div>
             <div data-tab="err" class="tab hidden">Error</div>
             <div class="toolbox">
+                <div class="dropdown export-dropdown">
+                    <button class="dropbtn">Export▾</button>
+                    <div class="dropdown-content">
+                        <a data-kind="markdown">Export all as Markdown</a>
+                        <a data-kind="curl">Export all as cURL</a>
+                        <a data-kind="har">Export all as HAR</a>
+                    </div>
+                </div>
                 <div class="dropdown copy-dropdown">
                     <button class="dropbtn">Copy▾</button>
                     <div class="dropdown-content">
@@ -287,6 +295,10 @@
          * @typedef {Object} BodyData
          * @property {"utf8"|"base64"} encode 
          * @property {string} value
+         */
+
+        /**
+         * @typedef {"markdown"|"curl"|"har"} ExportKind
          */
 
         /**
@@ -361,8 +373,9 @@
         const BASE_URL = "/__proxyfor__";
 
         const subscribeTrafficsEndpoint = `${BASE_URL}/subscribe/traffics`;
-        const getTrafficEndpoint = id => `${BASE_URL}/traffic/${id}`;
         const subscribeWebsocketEndpoint = id => `${BASE_URL}/subscribe/websocket/${id}`;
+        const getTrafficEndpoint = id => `${BASE_URL}/traffic/${id}`;
+        const listTrafficsEndpoint = `${BASE_URL}/traffics`;
 
         /**
          * @type {HTMLTableElement}
@@ -376,6 +389,16 @@
          * @type {HTMLDivElement}
          */
         const $mainView = document.querySelector(".main-view");
+
+        /**
+         * @type {HTMLButtonElement}
+         */
+        const $exportDropbtn = document.querySelector(".export-dropdown .dropbtn");
+
+        /**
+         * @type {HTMLDivElement}
+         */
+        const $exportDropdownContent = document.querySelector(".export-dropdown .dropdown-content");
 
         /**
          * @type {HTMLButtonElement}
@@ -450,8 +473,21 @@
                     if (tab) handleSelectedTab(tab, true);
                 }
             });
+            $exportDropbtn.addEventListener("click", (e) => {
+                $exportDropdownContent.style.display = "block";
+                $copyDropdownContent.style.display = "none";
+            });
+            $exportDropdownContent.addEventListener("click", (e) => {
+                $exportDropdownContent.style.display = "none";
+                const $kind = e.target.closest("[data-kind]");
+                if ($kind) {
+                    const kind = $kind.getAttribute("data-kind");
+                    if (kind) handleExport(kind);
+                }
+            });
             $copyDropbtn.addEventListener("click", (e) => {
                 $copyDropdownContent.style.display = "block";
+                $exportDropdownContent.style.display = "none";
             });
             $copyDropdownContent.addEventListener("click", (e) => {
                 $copyDropdownContent.style.display = "none";
@@ -463,6 +499,7 @@
             });
             document.addEventListener("click", function (e) {
                 if (!e.target.closest(".dropdown")) {
+                    $exportDropdownContent.style.display = "none";
                     $copyDropdownContent.style.display = "none";
                 }
             });
@@ -506,6 +543,41 @@
         function handleNewTraffic(traffic) {
             const { id, uri, method, status } = traffic;
             $trafficTableBody.insertAdjacentHTML("beforeend", tmplTrafficTableRow(id, uri, method, status));
+        }
+
+        /**
+         * @param {ExportKind} kind
+         */
+        function handleExport(kind) {
+            fetch(listTrafficsEndpoint + `?${kind}`)
+                .then(async res => {
+                    const contentType = res.headers.get('content-type');
+                    const text = await res.text();
+                    let filename = 'txt';
+                    switch (kind) {
+                        case "markdown":
+                            filename = 'traffics.md';
+                            break;
+                        case "curl":
+                            filename = 'traffics.sh';
+                            break;
+                        case "har":
+                            filename = 'traffics.har';
+                            break;
+                    };
+                    const file = new File([text], filename, { type: contentType });
+
+                    const url = URL.createObjectURL(file);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    a.click();
+
+                    URL.revokeObjectURL(url);
+                })
+                .catch(err => {
+                    console.error(`Failed to list traffics`, err);
+                })
         }
 
         /**

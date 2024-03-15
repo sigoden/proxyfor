@@ -110,13 +110,14 @@ impl Server {
                 self.handle_web_index(&mut res).await
             } else if path == "/subscribe/traffics" {
                 self.handle_subscribe_traffics(&mut res).await
+            } else if let Some(id) = path.strip_prefix("/subscribe/websocket/") {
+                self.handle_subscribe_websocket(&mut res, id).await
             } else if path == "/traffics" {
-                self.handle_list_traffics(&mut res).await
+                let query = req.uri().query().unwrap_or_default();
+                self.handle_list_traffics(&mut res, query).await
             } else if let Some(id) = path.strip_prefix("/traffic/") {
                 let query = req.uri().query().unwrap_or_default();
                 self.handle_get_traffic(&mut res, id, query).await
-            } else if let Some(id) = path.strip_prefix("/subscribe/websocket/") {
-                self.handle_subscribe_websocket(&mut res, id).await
             } else {
                 *res.status_mut() = StatusCode::NOT_FOUND;
                 return Ok(res);
@@ -239,7 +240,7 @@ impl Server {
     }
 
     async fn handle_subscribe_traffics(&self, res: &mut Response) -> Result<()> {
-        let (init_data, receiver) = (self.state.list(), self.state.subscribe_traffics());
+        let (init_data, receiver) = (self.state.list_heads(), self.state.subscribe_traffics());
         let stream = BroadcastStream::new(receiver);
         let stream = stream
             .map_ok(|head| ndjson_frame(&head))
@@ -262,12 +263,19 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_list_traffics(&self, res: &mut Response) -> Result<()> {
-        set_res_body(res, serde_json::to_string_pretty(&self.state.list())?);
-        res.headers_mut().insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/json; charset=UTF-8"),
-        );
+    async fn handle_list_traffics(&self, res: &mut Response, query: &str) -> Result<()> {
+        if query.is_empty() {
+            set_res_body(res, serde_json::to_string_pretty(&self.state.list_heads())?);
+            res.headers_mut().insert(
+                CONTENT_TYPE,
+                HeaderValue::from_static("application/json; charset=UTF-8"),
+            );
+        } else {
+            let (data, mime) = self.state.export_traffics(query)?;
+            set_res_body(res, data);
+            res.headers_mut()
+                .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
+        }
         res.headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         Ok(())
@@ -276,21 +284,10 @@ impl Server {
     async fn handle_get_traffic(&self, res: &mut Response, id: &str, query: &str) -> Result<()> {
         match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
             Some(traffic) => {
-                match query {
-                    "markdown" | "curl" | "har" | "res-body" => {
-                        let (data, mime) = traffic.export(query)?;
-                        set_res_body(res, data);
-                        res.headers_mut()
-                            .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
-                    }
-                    _ => {
-                        set_res_body(res, serde_json::to_string_pretty(&traffic)?);
-                        res.headers_mut().insert(
-                            CONTENT_TYPE,
-                            HeaderValue::from_static("application/json; charset=UTF-8"),
-                        );
-                    }
-                }
+                let (data, mime) = traffic.export(query)?;
+                set_res_body(res, data);
+                res.headers_mut()
+                    .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
                 res.headers_mut()
                     .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
             }

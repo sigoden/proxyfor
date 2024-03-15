@@ -1,7 +1,9 @@
-use crate::traffic::{Body, Traffic};
+use crate::traffic::{wrap_entries, Body, Traffic};
 
+use anyhow::{anyhow, bail, Result};
 use indexmap::IndexMap;
 use serde::Serialize;
+use serde_json::Value;
 use std::sync::Mutex;
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
@@ -46,7 +48,7 @@ impl State {
         self.traffics_notifier.subscribe()
     }
 
-    pub(crate) fn list(&self) -> Vec<Head> {
+    pub(crate) fn list_heads(&self) -> Vec<Head> {
         let Ok(entries) = self.traffics.lock() else {
             return vec![];
         };
@@ -54,6 +56,40 @@ impl State {
             .iter()
             .map(|(id, traffic)| Head::new(*id, traffic))
             .collect()
+    }
+
+    pub(crate) fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
+        let entries = self.traffics.lock().map_err(|err| anyhow!("{err}"))?;
+        match format {
+            "markdown" => {
+                let output = entries
+                    .values()
+                    .map(|v| v.markdown(false))
+                    .collect::<Vec<String>>()
+                    .join("\n\n");
+                Ok((output, "text/markdown; charset=UTF-8"))
+            }
+            "har" => {
+                let entries: Vec<Value> = entries.values().filter_map(|v| v.har_entry()).collect();
+                let json_output = wrap_entries(entries);
+                let output = serde_json::to_string_pretty(&json_output)?;
+                Ok((output, "application/json; charset=UTF-8"))
+            }
+            "curl" => {
+                let output = entries
+                    .values()
+                    .map(|v| v.curl())
+                    .collect::<Vec<String>>()
+                    .join("\n\n");
+                Ok((output, "text/plain; charset=UTF-8"))
+            }
+            "" => {
+                let traffics: Vec<&Traffic> = entries.values().collect();
+                let output = serde_json::to_string_pretty(&traffics)?;
+                Ok((output, "application/json; charset=UTF-8"))
+            }
+            _ => bail!("Unsupported format: {}", format),
+        }
     }
 
     pub(crate) fn new_websocket(&self) -> Option<usize> {
