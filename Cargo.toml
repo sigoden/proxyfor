@@ -38,6 +38,7 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = { version = "1.0.114", features = ["preserve_order"] }
 time = "0.3.34"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
+tokio-graceful = "0.1.6"
 tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
 tokio-rustls = "0.25.0"
 tokio-stream = { version = "0.1.14", default-features = false, features = ["sync"] }
@@ -45,7 +46,10 @@ tokio-tungstenite = { version = "0.21.0", features = ["rustls-tls-webpki-roots"]
 url = "2.5.0"
 
 [dev-dependencies]
+async-http-proxy = { version = "1.2.5", features = ["runtime-tokio"] }
+insta = "1.36.1"
 pretty_assertions = "1.4.0"
+reqwest = { version = "0.11", features = ["rustls-tls", "stream"], default-features = false }
 
 [profile.release]
 lto = true

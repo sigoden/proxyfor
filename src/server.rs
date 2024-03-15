@@ -1,7 +1,7 @@
 use crate::{
-    certificate_authority::CertificateAuthority,
-    filter::{is_match_title, is_match_type, Filter},
-    recorder::{ErrorRecorder, PrintMode, Recorder},
+    cert::CertificateAuthority,
+    filter::{is_match_title, is_match_type, TitleFilter},
+    recorder::{ErrorRecorder, Recorder},
     rewind::Rewind,
     state::State,
 };
@@ -33,36 +33,128 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
 };
 use serde::Serialize;
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::TcpStream,
+    net::{TcpListener, TcpStream},
+    sync::oneshot,
 };
+use tokio_graceful::Shutdown;
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::tungstenite;
 
 const WEB_INDEX: &str = include_str!("../assets/index.html");
 const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
-const CERT_PREFIX: &str = "http://proxyfor.local/";
-pub(crate) const WEB_PREFIX: &str = "/__proxyfor__";
+pub const CERT_PREFIX: &str = "http://proxyfor.local/";
+pub const WEB_PREFIX: &str = "/__proxyfor__";
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
 
-pub(crate) struct Server {
-    pub(crate) reverse_proxy_url: Option<String>,
-    pub(crate) ca: CertificateAuthority,
-    pub(crate) filters: Vec<Filter>,
-    pub(crate) mime_filters: Vec<String>,
-    pub(crate) state: State,
-    pub(crate) web: bool,
-    #[allow(unused)]
-    pub(crate) running: Arc<AtomicBool>,
+pub struct ServerBuilder {
+    ca: CertificateAuthority,
+    reverse_proxy_url: Option<String>,
+    title_filters: Vec<TitleFilter>,
+    mime_filters: Vec<String>,
+    web: bool,
+    print_mode: PrintMode,
+}
+
+impl ServerBuilder {
+    pub fn new(ca: CertificateAuthority) -> Self {
+        Self {
+            ca,
+            reverse_proxy_url: None,
+            title_filters: vec![],
+            mime_filters: vec![],
+            web: false,
+            print_mode: PrintMode::Markdown,
+        }
+    }
+
+    pub fn reverse_proxy_url(mut self, reverse_proxy_url: Option<String>) -> Self {
+        self.reverse_proxy_url = reverse_proxy_url;
+        self
+    }
+
+    pub fn title_filters(mut self, filters: Vec<TitleFilter>) -> Self {
+        self.title_filters = filters;
+        self
+    }
+    pub fn mime_filters(mut self, mime_filters: Vec<String>) -> Self {
+        self.mime_filters = mime_filters;
+        self
+    }
+
+    pub fn web(mut self, web: bool) -> Self {
+        self.web = web;
+        self
+    }
+
+    pub fn print_mode(mut self, print_mode: PrintMode) -> Self {
+        self.print_mode = print_mode;
+        self
+    }
+
+    pub fn build(self) -> Arc<Server> {
+        Arc::new(Server {
+            ca: self.ca,
+            reverse_proxy_url: self.reverse_proxy_url,
+            title_filters: self.title_filters,
+            mime_filters: self.mime_filters,
+            web: self.web,
+            print_mode: self.print_mode,
+            state: State::new(),
+        })
+    }
+}
+
+pub struct Server {
+    ca: CertificateAuthority,
+    reverse_proxy_url: Option<String>,
+    title_filters: Vec<TitleFilter>,
+    mime_filters: Vec<String>,
+    web: bool,
+    print_mode: PrintMode,
+    state: State,
 }
 
 impl Server {
-    pub(crate) async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
+    pub async fn run(self: Arc<Self>, listener: TcpListener) -> Result<oneshot::Sender<()>> {
+        let (tx, rx) = oneshot::channel();
+        tokio::spawn(async move {
+            let shutdown = Shutdown::new(async { rx.await.unwrap_or_default() });
+            let guard = shutdown.guard_weak();
+
+            loop {
+                tokio::select! {
+                    res = listener.accept() => {
+                        let Ok((cnx, _)) = res else {
+                            continue;
+                        };
+
+                        let stream = TokioIo::new(cnx);
+                        let server = self.clone();
+                        shutdown.spawn_task(async move {
+                            let hyper_service = service_fn(move |request: hyper::Request<Incoming>| {
+                                server.clone().handle(request)
+                            });
+                            let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                                .serve_connection_with_upgrades(stream, hyper_service)
+                                .await;
+                        });
+                    }
+                    _ = guard.cancelled() => {
+                        break;
+                    }
+                }
+            }
+        });
+        Ok(tx)
+    }
+
+    async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
         let req_uri = req.uri().to_string();
         let req_headers = req.headers().clone();
         let method = req.method().clone();
@@ -73,9 +165,7 @@ impl Server {
             format!("{base_url}{req_uri}")
         } else {
             let mut recorder = Recorder::new(&req_uri, method.as_str());
-            if self.web {
-                recorder.change_print_mode(PrintMode::Oneline);
-            }
+            recorder.set_print_mode(self.print_mode);
             return self.internal_server_error("No reserver proxy url", recorder);
         };
 
@@ -130,17 +220,18 @@ impl Server {
         }
 
         let mut recorder = Recorder::new(&req_uri, method.as_str());
-        if self.web {
-            recorder.change_print_mode(PrintMode::Oneline);
-        }
+        recorder.set_print_mode(self.print_mode);
 
         let req_version = req.version();
         recorder.set_req_version(&req_version);
 
-        recorder.check_match(is_match_title(&self.filters, &format!("{method} {uri}")));
+        recorder.check_match(is_match_title(
+            &self.title_filters,
+            &format!("{method} {uri}"),
+        ));
 
         if method == Method::CONNECT {
-            recorder.check_match(!self.filters.is_empty() || !self.mime_filters.is_empty());
+            recorder.check_match(!self.title_filters.is_empty() || !self.mime_filters.is_empty());
             return self.handle_connect(req, recorder);
         }
 
@@ -628,12 +719,12 @@ impl Server {
         let proxy_res_status = proxy_res.status();
         let proxy_res_headers = proxy_res.headers().clone();
 
-        if let Some(header_value) = proxy_res_headers
+        let content_type = proxy_res_headers
             .get(CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
-        {
-            recorder.check_match(is_match_type(&self.mime_filters, header_value));
-        }
+            .unwrap_or_default();
+
+        recorder.check_match(is_match_type(&self.mime_filters, content_type));
 
         let proxy_res_body = match proxy_res.collect().await {
             Ok(v) => v.to_bytes(),
@@ -693,6 +784,14 @@ impl Server {
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
         Ok(res)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PrintMode {
+    Nothing,
+    Oneline,
+    #[default]
+    Markdown,
 }
 
 fn set_res_body(res: &mut Response, body: String) {

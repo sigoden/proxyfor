@@ -1,0 +1,182 @@
+---
+source: tests/web.rs
+expression: output
+---
+/traffic/:id
+
+{
+  "uri": "http://localhost:port/echo",
+  "method": "POST",
+  "start": "<DATETIME>",
+  "req_version": "HTTP/1.1",
+  "req_headers": [
+    {
+      "name": "content-type",
+      "value": "text/plain"
+    },
+    {
+      "name": "accept",
+      "value": "*/*"
+    },
+    {
+      "name": "host",
+      "value": "localhost:port"
+    },
+    {
+      "name": "content-length",
+      "value": "13"
+    }
+  ],
+  "req_body": {
+    "encode": "utf8",
+    "value": "Hello, World!"
+  },
+  "status": 200,
+  "res_headers": [
+    {
+      "name": "content-type",
+      "value": "text/plain"
+    },
+    {
+      "name": "content-length",
+      "value": "13"
+    },
+    {
+      "name": "date",
+      "value": "<DATETIME>"
+    }
+  ],
+  "res_version": "HTTP/1.1",
+  "res_body": {
+    "encode": "utf8",
+    "value": "Hello, World!"
+  },
+  "websocket_id": null,
+  "error": null
+}
+
+/traffic/:id?markdown
+
+
+# POST http://localhost:port/echo 200
+
+REQUEST HEADERS
+```
+content-type: text/plain
+accept: */*
+host: localhost:port
+content-length: 13
+```
+
+REQUEST BODY
+```plain
+Hello, World!
+```
+
+RESPONSE HEADERS
+```
+content-type: text/plain
+content-length: 13
+date: <DATETIME>
+```
+
+RESPONSE BODY
+```plain
+Hello, World!
+```
+
+/traffic/:id?har
+
+{
+  "log": {
+    "version": "1.2",
+    "creator": {
+      "name": "proxyfor",
+      "version": "0.2.0",
+      "comment": ""
+    },
+    "pages": [],
+    "entries": [
+      {
+        "startedDateTime": "<DATETIME>",
+        "time": -1,
+        "request": {
+          "method": "POST",
+          "url": "http://localhost:port/echo",
+          "httpVersion": "HTTP/1.1",
+          "cookies": [],
+          "headers": [
+            {
+              "name": "content-type",
+              "value": "text/plain"
+            },
+            {
+              "name": "accept",
+              "value": "*/*"
+            },
+            {
+              "name": "host",
+              "value": "localhost:port"
+            },
+            {
+              "name": "content-length",
+              "value": "13"
+            }
+          ],
+          "queryString": [],
+          "postData": {
+            "mimeType": "text/plain",
+            "text": "Hello, World!"
+          },
+          "headersSize": -1,
+          "bodySize": -1
+        },
+        "response": {
+          "status": 200,
+          "statusText": "",
+          "httpVersion": "HTTP/1.1",
+          "cookies": [],
+          "headers": [
+            {
+              "name": "content-type",
+              "value": "text/plain"
+            },
+            {
+              "name": "content-length",
+              "value": "13"
+            },
+            {
+              "name": "date",
+              "value": "<DATETIME>"
+            }
+          ],
+          "content": {
+            "mimeType": "text/plain",
+            "text": "Hello, World!",
+            "size": -1
+          },
+          "redirectURL": "",
+          "headersSize": -1,
+          "bodySize": -1
+        },
+        "cache": {},
+        "timings": {
+          "connect": -1,
+          "ssl": -1,
+          "send": -1,
+          "receive": -1,
+          "wait": -1
+        }
+      }
+    ]
+  }
+}
+
+/traffic/:id?curl
+
+curl http://localhost:port/echo \
+  -X POST \
+  -H 'content-type: text/plain' \
+  -H 'accept: */*' \
+  -H 'host: localhost:port' \
+  -d 'Hello, World!'

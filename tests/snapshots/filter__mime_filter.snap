@@ -1,0 +1,12 @@
+---
+source: tests/filter.rs
+expression: output
+---
+[
+  {
+    "id": 1,
+    "method": "POST",
+    "uri": "http://localhost:port/echo",
+    "status": 200
+  }
+]

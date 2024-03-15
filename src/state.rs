@@ -83,7 +83,7 @@ impl State {
                     .join("\n\n");
                 Ok((output, "text/plain; charset=UTF-8"))
             }
-            "" => {
+            "mem" => {
                 let traffics: Vec<&Traffic> = entries.values().collect();
                 let output = serde_json::to_string_pretty(&traffics)?;
                 Ok((output, "application/json; charset=UTF-8"))

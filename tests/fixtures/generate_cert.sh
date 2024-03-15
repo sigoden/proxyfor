@@ -1,0 +1,1 @@
+openssl req -subj '/CN=proxyfor/O=proxyfor' -x509 -newkey rsa:4096 -keyout proxyfor-key.pem -out proxyfor-ca-cert.cer -sha256 -nodes -days 3650

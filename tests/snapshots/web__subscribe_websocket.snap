@@ -1,0 +1,8 @@
+---
+source: tests/web.rs
+expression: output
+---
+{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello"}}}
+{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world"}}}
+{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello"}}}
+{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world"}}}

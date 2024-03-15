@@ -1,0 +1,12 @@
+---
+source: tests/filter.rs
+expression: output
+---
+[
+  {
+    "id": 1,
+    "method": "GET",
+    "uri": "http://localhost:port/hello",
+    "status": 200
+  }
+]

@@ -1,0 +1,6 @@
+---
+source: tests/web.rs
+expression: output
+---
+{"id":1,"method":"POST","uri":"http://localhost:port/echo","status":200}
+{"id":2,"method":"POST","uri":"http://localhost:port/echo","status":200}
