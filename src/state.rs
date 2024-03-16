@@ -34,7 +34,7 @@ impl State {
             return;
         };
         let id = traffics.len() + 1;
-        let head = Head::new(id, &traffic);
+        let head = traffic.head(id);
         traffics.insert(id, traffic);
         let _ = self.traffics_notifier.send(head);
     }
@@ -54,7 +54,7 @@ impl State {
         };
         entries
             .iter()
-            .map(|(id, traffic)| Head::new(*id, traffic))
+            .map(|(id, traffic)| traffic.head(*id))
             .collect()
     }
 
@@ -157,22 +157,13 @@ pub(crate) type SubscribeWebSocket = (
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct Head {
-    id: usize,
-    method: String,
-    uri: String,
-    status: Option<u16>,
-}
-
-impl Head {
-    pub(crate) fn new(id: usize, traffic: &Traffic) -> Self {
-        let (method, uri, status) = traffic.head();
-        Self {
-            id,
-            method: method.to_string(),
-            uri: uri.to_string(),
-            status,
-        }
-    }
+    pub(crate) id: usize,
+    pub(crate) method: String,
+    pub(crate) uri: String,
+    pub(crate) status: Option<u16>,
+    pub(crate) size: Option<usize>,
+    pub(crate) time: Option<usize>,
+    pub(crate) mime: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

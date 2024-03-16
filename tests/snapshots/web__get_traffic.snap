@@ -5,9 +5,10 @@ expression: output
 /traffic/:id
 
 {
-  "uri": "http://localhost:port/echo",
+  "uri": "http://localhost:<PORT>/echo",
   "method": "POST",
   "start": "<DATETIME>",
+  "time": <TIME>,
   "req_version": "HTTP/1.1",
   "req_headers": [
     {
@@ -20,18 +21,21 @@ expression: output
     },
     {
       "name": "host",
-      "value": "localhost:port"
+      "value": "localhost:<PORT>"
     },
     {
       "name": "content-length",
       "value": "13"
     }
   ],
+  "req_headers_size": 121,
   "req_body": {
     "encode": "utf8",
     "value": "Hello, World!"
   },
+  "req_body_size": 13,
   "status": 200,
+  "res_version": "HTTP/1.1",
   "res_headers": [
     {
       "name": "content-type",
@@ -46,11 +50,13 @@ expression: output
       "value": "<DATETIME>"
     }
   ],
-  "res_version": "HTTP/1.1",
+  "res_headers_size": 114,
   "res_body": {
     "encode": "utf8",
     "value": "Hello, World!"
   },
+  "res_body_size": 13,
+  "res_body_decompress_size": 13,
   "websocket_id": null,
   "error": null
 }
@@ -58,13 +64,13 @@ expression: output
 /traffic/:id?markdown
 
 
-# POST http://localhost:port/echo 200
+# POST http://localhost:<PORT>/echo 200
 
 REQUEST HEADERS
 ```
 content-type: text/plain
 accept: */*
-host: localhost:port
+host: localhost:<PORT>
 content-length: 13
 ```
 
@@ -99,10 +105,10 @@ Hello, World!
     "entries": [
       {
         "startedDateTime": "<DATETIME>",
-        "time": -1,
+        "time": <TIME>,
         "request": {
           "method": "POST",
-          "url": "http://localhost:port/echo",
+          "url": "http://localhost:<PORT>/echo",
           "httpVersion": "HTTP/1.1",
           "cookies": [],
           "headers": [
@@ -116,7 +122,7 @@ Hello, World!
             },
             {
               "name": "host",
-              "value": "localhost:port"
+              "value": "localhost:<PORT>"
             },
             {
               "name": "content-length",
@@ -128,8 +134,8 @@ Hello, World!
             "mimeType": "text/plain",
             "text": "Hello, World!"
           },
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 121,
+          "bodySize": 13
         },
         "response": {
           "status": 200,
@@ -151,13 +157,14 @@ Hello, World!
             }
           ],
           "content": {
+            "size": 13,
             "mimeType": "text/plain",
             "text": "Hello, World!",
-            "size": -1
+            "compression": 0
           },
           "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 114,
+          "bodySize": 13
         },
         "cache": {},
         "timings": {
@@ -174,9 +181,9 @@ Hello, World!
 
 /traffic/:id?curl
 
-curl http://localhost:port/echo \
+curl http://localhost:<PORT>/echo \
   -X POST \
   -H 'content-type: text/plain' \
   -H 'accept: */*' \
-  -H 'host: localhost:port' \
+  -H 'host: localhost:<PORT>' \
   -d 'Hello, World!'

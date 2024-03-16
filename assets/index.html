@@ -143,7 +143,27 @@
         }
 
         .col-status {
+            width: 50px;
+        }
+
+        .col-type {
             width: 60px;
+        }
+
+        tbody .col-type {
+            font-size: 8px;
+            text-align: center;
+        }
+
+        .col-size {
+            width: 50px;
+            text-align: right;
+        }
+
+        .col-time {
+            width: 50px;
+            text-align: right;
+            padding-right: 4px;
         }
 
         .main-view {
@@ -233,6 +253,9 @@
                     <th class="col-uri">Path</th>
                     <th class="col-method">Method</th>
                     <th class="col-status">Status</th>
+                    <th class="col-type">Type</th>
+                    <th class="col-size">Size</th>
+                    <th class="col-time">Time</th>
                 </tr>
             </thead>
             <tbody>
@@ -282,6 +305,17 @@
          * @property {?BodyData} res_body
          * @property {?number} websocket_id
          * @property {?string} error
+         */
+
+        /**
+         * @typedef {Object} TrafficHead
+         * @property {number} id
+         * @property {string} method
+         * @property {string} uri
+         * @property {?number} status
+         * @property {?number} size
+         * @property {?number} time
+         * @property {?string} mime
          */
 
         /**
@@ -445,10 +479,8 @@
                         }
                         let lines = buf.split("\n");
                         for (let i = 0; i < lines.length - 1; i++) {
-                            try {
-                                const traffic = JSON.parse(lines[i]);
-                                handleNewTraffic(traffic);
-                            } catch { }
+                            const traffic = JSON.parse(lines[i]);
+                            handleNewTraffic(traffic);
                         }
                         buf = lines[lines.length - 1];
                         return reader.read().then(handleNDJson);
@@ -539,9 +571,12 @@
             updateTabContent();
         }
 
-        function handleNewTraffic(traffic) {
-            const { id, uri, method, status } = traffic;
-            $trafficTableBody.insertAdjacentHTML("beforeend", tmplTrafficTableRow(id, uri, method, status));
+        /**
+         * @param {TrafficHead} trafficHead
+         */
+        function handleNewTraffic(trafficHead) {
+            const row = tmplTrafficTableRow(trafficHead);
+            $trafficTableBody.insertAdjacentHTML("beforeend", row);
         }
 
         /**
@@ -707,12 +742,18 @@
             $mainView.insertAdjacentHTML("beforeend", tmpl);
         }
 
-        function tmplTrafficTableRow(id, uri, method, status) {
+        /**
+         * @param {TrafficHead} trafficHead
+         */
+        function tmplTrafficTableRow(trafficHead) {
             return `
-            <tr data-traffic-id="${id}">
-                <td class="col-uri">${uri}</td>
-                <td class="col-method">${method}</td>
-                <td class="col-status">${status || ""}</td>
+            <tr data-traffic-id="${trafficHead.id}">
+                <td class="col-uri">${trafficHead.uri}</td>
+                <td class="col-method">${trafficHead.method}</td>
+                <td class="col-status">${trafficHead.status || ""}</td>
+                <td class="col-type">${resolveResourceType(trafficHead)}</td>
+                <td class="col-size">${formatSize(trafficHead.size)}</td>
+                <td class="col-time">${formatTimeDelta(trafficHead.time)}</td>
             </tr>`;
         }
 
@@ -754,6 +795,7 @@
         function tmplBody(body, headers) {
             if (!body) return "";
             let { encode, value } = body;
+            if (!value) return "";
             let contentType = getContentType(headers);
             if (encode == "utf8") {
                 let language = highlightLanguage(contentType);
@@ -822,8 +864,49 @@
         /**
          * @param {?Header[]} headers
          */
-        function getHeader(headers, name) {
-            return (headers || []).find(({ name }) => name.toLowerCase() === name.toLowerCase())?.value || "";
+        function getHeader(headers, type) {
+            return (headers || []).find(({ name }) => name.toLowerCase() === type)?.value || "";
+        }
+
+        /**
+         * @param {TrafficHead} trafficHead
+         */
+        function resolveResourceType(trafficHead) {
+            if (trafficHead.mime) {
+                if (trafficHead.mime.startsWith("image/")) {
+                    return "IMAGE";
+                }
+                if (trafficHead.mime.startsWith("audio/")) {
+                    return "AUDIO";
+                }
+                if (trafficHead.mime.startsWith("video/")) {
+                    return "VIDEO";
+                }
+                if (trafficHead.mime.indexOf("json") >= 0) {
+                    return "JSON"
+                }
+                if (trafficHead.mime.indexOf("xml") >= 0) {
+                    return "XML"
+                }
+                if (trafficHead.mime.indexOf("javascript") >= 0) {
+                    return "JS"
+                }
+                if (trafficHead.mime.indexOf("css") >= 0) {
+                    return "CSS"
+                }
+                if (trafficHead.mime.indexOf("html") >= 0) {
+                    return "HTML"
+                }
+            } else if (trafficHead.status) {
+                if (trafficHead.status == 101) {
+                    return "WEBSOCKET"
+                } else if (trafficHead.status == 304) {
+                    return "NOT-MODIF"
+                } else if (trafficHead.status >= 300 && trafficHead.status < 400) {
+                    return "REDIRECT"
+                }
+            }
+            return "";
         }
 
         /** 
@@ -855,6 +938,36 @@
 
             return new Blob(byteArrays, { type: contentType });
 
+        }
+
+        function formatSize(bytes) {
+            if (bytes === null) return "";
+            if (bytes === 0) return "0";
+            const prefix = ["b", "kb", "mb", "gb", "tb"];
+            let i = 0;
+            for (; i < prefix.length; i++) {
+                if (Math.pow(1024, i + 1) > bytes) {
+                    break;
+                }
+            }
+            let precision;
+            if (bytes % Math.pow(1024, i) === 0) precision = 0;
+            else precision = 1;
+            return (bytes / Math.pow(1024, i)).toFixed(precision) + prefix[i];
+        }
+
+        function formatTimeDelta(milliseconds) {
+            let time = milliseconds;
+            if (time === null) return "";
+            if (time === 0) return "0";
+            const prefix = ["ms", "s", "min", "h"];
+            const div = [1000, 60, 60];
+            let i = 0;
+            while (Math.abs(time) >= div[i] && i < div.length) {
+                time = time / div[i];
+                i++;
+            }
+            return Math.round(time) + prefix[i];
         }
 
         function formatDate(date) {

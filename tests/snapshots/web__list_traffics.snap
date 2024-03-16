@@ -8,32 +8,41 @@ expression: output
   {
     "id": 1,
     "method": "GET",
-    "uri": "http://localhost:port/hello",
-    "status": 200
+    "uri": "http://localhost:<PORT>/hello",
+    "status": 200,
+    "size": 13,
+    "time": <TIME>,
+    "mime": null
   },
   {
     "id": 2,
     "method": "GET",
-    "uri": "http://localhost:port/hello/gzip",
-    "status": 200
+    "uri": "http://localhost:<PORT>/hello/gzip",
+    "status": 200,
+    "size": 33,
+    "time": <TIME>,
+    "mime": null
   },
   {
     "id": 3,
     "method": "POST",
-    "uri": "http://localhost:port/echo",
-    "status": 200
+    "uri": "http://localhost:<PORT>/echo",
+    "status": 200,
+    "size": 13,
+    "time": <TIME>,
+    "mime": "text/plain"
   }
 ]
 
 /traffics?markdown
 
 
-# GET http://localhost:port/hello 200
+# GET http://localhost:<PORT>/hello 200
 
 REQUEST HEADERS
 ```
 accept: */*
-host: localhost:port
+host: localhost:<PORT>
 ```
 
 RESPONSE HEADERS
@@ -48,12 +57,12 @@ Hello, World!
 ```
 
 
-# GET http://localhost:port/hello/gzip 200
+# GET http://localhost:<PORT>/hello/gzip 200
 
 REQUEST HEADERS
 ```
 accept: */*
-host: localhost:port
+host: localhost:<PORT>
 ```
 
 RESPONSE HEADERS
@@ -69,13 +78,13 @@ Hello, World!
 ```
 
 
-# POST http://localhost:port/echo 200
+# POST http://localhost:<PORT>/echo 200
 
 REQUEST HEADERS
 ```
 content-type: text/plain
 accept: */*
-host: localhost:port
+host: localhost:<PORT>
 content-length: 13
 ```
 
@@ -110,10 +119,10 @@ Hello, World!
     "entries": [
       {
         "startedDateTime": "<DATETIME>",
-        "time": -1,
+        "time": <TIME>,
         "request": {
           "method": "GET",
-          "url": "http://localhost:port/hello",
+          "url": "http://localhost:<PORT>/hello",
           "httpVersion": "HTTP/1.1",
           "cookies": [],
           "headers": [
@@ -123,7 +132,7 @@ Hello, World!
             },
             {
               "name": "host",
-              "value": "localhost:port"
+              "value": "localhost:<PORT>"
             }
           ],
           "queryString": [],
@@ -131,8 +140,8 @@ Hello, World!
             "mimeType": "",
             "text": ""
           },
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 59,
+          "bodySize": 0
         },
         "response": {
           "status": 200,
@@ -150,13 +159,14 @@ Hello, World!
             }
           ],
           "content": {
+            "size": 13,
             "mimeType": "",
             "text": "Hello, World!",
-            "size": -1
+            "compression": 0
           },
           "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 80,
+          "bodySize": 13
         },
         "cache": {},
         "timings": {
@@ -169,10 +179,10 @@ Hello, World!
       },
       {
         "startedDateTime": "<DATETIME>",
-        "time": -1,
+        "time": <TIME>,
         "request": {
           "method": "GET",
-          "url": "http://localhost:port/hello/gzip",
+          "url": "http://localhost:<PORT>/hello/gzip",
           "httpVersion": "HTTP/1.1",
           "cookies": [],
           "headers": [
@@ -182,7 +192,7 @@ Hello, World!
             },
             {
               "name": "host",
-              "value": "localhost:port"
+              "value": "localhost:<PORT>"
             }
           ],
           "queryString": [],
@@ -190,8 +200,8 @@ Hello, World!
             "mimeType": "",
             "text": ""
           },
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 59,
+          "bodySize": 0
         },
         "response": {
           "status": 200,
@@ -213,13 +223,14 @@ Hello, World!
             }
           ],
           "content": {
+            "size": 33,
             "mimeType": "",
             "text": "Hello, World!",
-            "size": -1
+            "compression": -20
           },
           "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 120,
+          "bodySize": 33
         },
         "cache": {},
         "timings": {
@@ -232,10 +243,10 @@ Hello, World!
       },
       {
         "startedDateTime": "<DATETIME>",
-        "time": -1,
+        "time": <TIME>,
         "request": {
           "method": "POST",
-          "url": "http://localhost:port/echo",
+          "url": "http://localhost:<PORT>/echo",
           "httpVersion": "HTTP/1.1",
           "cookies": [],
           "headers": [
@@ -249,7 +260,7 @@ Hello, World!
             },
             {
               "name": "host",
-              "value": "localhost:port"
+              "value": "localhost:<PORT>"
             },
             {
               "name": "content-length",
@@ -261,8 +272,8 @@ Hello, World!
             "mimeType": "text/plain",
             "text": "Hello, World!"
           },
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 121,
+          "bodySize": 13
         },
         "response": {
           "status": 200,
@@ -284,13 +295,14 @@ Hello, World!
             }
           ],
           "content": {
+            "size": 13,
             "mimeType": "text/plain",
             "text": "Hello, World!",
-            "size": -1
+            "compression": 0
           },
           "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
+          "headersSize": 114,
+          "bodySize": 13
         },
         "cache": {},
         "timings": {
@@ -307,17 +319,17 @@ Hello, World!
 
 /traffics?curl
 
-curl http://localhost:port/hello \
+curl http://localhost:<PORT>/hello \
   -H 'accept: */*' \
-  -H 'host: localhost:port'
+  -H 'host: localhost:<PORT>'
 
-curl http://localhost:port/hello/gzip \
+curl http://localhost:<PORT>/hello/gzip \
   -H 'accept: */*' \
-  -H 'host: localhost:port'
+  -H 'host: localhost:<PORT>'
 
-curl http://localhost:port/echo \
+curl http://localhost:<PORT>/echo \
   -X POST \
   -H 'content-type: text/plain' \
   -H 'accept: */*' \
-  -H 'host: localhost:port' \
+  -H 'host: localhost:<PORT>' \
   -d 'Hello, World!'

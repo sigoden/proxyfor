@@ -33,7 +33,7 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
 };
 use serde::Serialize;
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -156,7 +156,6 @@ impl Server {
 
     async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
         let req_uri = req.uri().to_string();
-        let req_headers = req.headers().clone();
         let method = req.method().clone();
 
         let uri = if !req_uri.starts_with('/') || req_uri.starts_with(WEB_PREFIX) {
@@ -164,8 +163,7 @@ impl Server {
         } else if let Some(base_url) = &self.reverse_proxy_url {
             format!("{base_url}{req_uri}")
         } else {
-            let mut recorder = Recorder::new(&req_uri, method.as_str());
-            recorder.set_print_mode(self.print_mode);
+            let recorder = Recorder::new(&req_uri, method.as_str(), self.print_mode);
             return self.internal_server_error("No reserver proxy url", recorder);
         };
 
@@ -219,8 +217,7 @@ impl Server {
             return Ok(res);
         }
 
-        let mut recorder = Recorder::new(&req_uri, method.as_str());
-        recorder.set_print_mode(self.print_mode);
+        let mut recorder = Recorder::new(&req_uri, method.as_str(), self.print_mode);
 
         let req_version = req.version();
         recorder.set_req_version(&req_version);
@@ -235,11 +232,23 @@ impl Server {
             return self.handle_connect(req, recorder);
         }
 
-        recorder.set_req_headers(&req_headers);
+        recorder.set_req_headers(req.headers());
 
         if hyper_tungstenite::is_upgrade_request(&req) {
             let uri: Uri = uri.parse().expect("Invalid uri");
             return self.handle_upgrade_websocket(req, uri, recorder).await;
+        }
+
+        let mut builder = hyper::Request::builder()
+            .uri(&uri)
+            .method(method.clone())
+            .version(req_version);
+
+        for (key, value) in req.headers().iter() {
+            if matches!(key, &HOST | &CONNECTION | &PROXY_AUTHORIZATION) {
+                continue;
+            }
+            builder = builder.header(key.clone(), value.clone());
         }
 
         let req_body = match req.collect().await {
@@ -251,17 +260,6 @@ impl Server {
 
         recorder.set_req_body(&req_body);
 
-        let mut builder = hyper::Request::builder()
-            .uri(&uri)
-            .method(method.clone())
-            .version(req_version);
-        for (key, value) in req_headers.iter() {
-            if matches!(key, &HOST | &CONNECTION | &PROXY_AUTHORIZATION) {
-                continue;
-            }
-            builder = builder.header(key.clone(), value.clone());
-        }
-
         let proxy_req = match builder.body(Full::new(req_body)) {
             Ok(v) => v,
             Err(err) => {
@@ -269,6 +267,7 @@ impl Server {
             }
         };
 
+        let start = Instant::now();
         let builder = Client::builder(TokioExecutor::new());
         let proxy_res = if uri.starts_with("https://") {
             builder
@@ -292,7 +291,7 @@ impl Server {
             }
         };
 
-        self.process_proxy_res(proxy_res, recorder).await
+        self.process_proxy_res(proxy_res, recorder, start).await
     }
 
     async fn handle_cert_index(&self, res: &mut Response, path: &str) -> Result<()> {
@@ -464,6 +463,7 @@ impl Server {
             hyper::Request::from_parts(parts, ())
         };
 
+        let start = Instant::now();
         match hyper_tungstenite::upgrade(&mut req, None) {
             Ok((proxy_res, websocket)) => {
                 let Some(id) = self.state.new_websocket() else {
@@ -496,7 +496,7 @@ impl Server {
                 };
 
                 tokio::spawn(fut);
-                self.process_proxy_res(proxy_res, recorder).await
+                self.process_proxy_res(proxy_res, recorder, start).await
             }
             Err(err) => self
                 .internal_server_error(format!("Failed to upgrade to websocket, {err}"), recorder),
@@ -714,6 +714,7 @@ impl Server {
         &self,
         proxy_res: hyper::Response<T>,
         mut recorder: Recorder,
+        instant: Instant,
     ) -> Result<Response, hyper::Error> {
         let proxy_res_version = proxy_res.version();
         let proxy_res_status = proxy_res.status();
@@ -732,6 +733,9 @@ impl Server {
                 return self.internal_server_error(err, recorder);
             }
         };
+        recorder.set_time(instant.elapsed());
+
+        let proxy_res_body_size = proxy_res_body.len();
 
         let mut res = Response::default();
         let mut encoding = "";
@@ -749,11 +753,15 @@ impl Server {
             .set_res_version(&proxy_res_version)
             .set_res_headers(&proxy_res_headers);
 
-        if !proxy_res_body.is_empty() && recorder.is_valid() {
-            let decompress_body = decompress(&proxy_res_body, encoding)
-                .await
-                .unwrap_or_else(|| proxy_res_body.to_vec());
-            recorder.set_res_body(&decompress_body);
+        if recorder.is_valid() {
+            if proxy_res_body_size > 0 {
+                let body = decompress(&proxy_res_body, encoding)
+                    .await
+                    .unwrap_or_else(|| proxy_res_body.to_vec());
+                recorder.set_res_body(&body, proxy_res_body_size);
+            } else {
+                recorder.set_res_body(&proxy_res_body, proxy_res_body_size);
+            }
         }
 
         *res.status_mut() = proxy_res_status;

@@ -215,6 +215,10 @@ pub fn mask_text(text: &str) -> String {
     let re = fancy_regex::Regex::new(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d+Z)|(\w{3}, \d{2} \w{3} \d{4} \d{2}:\d{2}:\d{2} GMT)").unwrap();
     let text = re.replace_all(text, "<DATETIME>");
     let re = fancy_regex::Regex::new(r#"localhost:\d+"#).unwrap();
-    let text = re.replace_all(&text, "localhost:port");
+    let text = re.replace_all(&text, "localhost:<PORT>");
+    let re = fancy_regex::Regex::new(r#""time": \d+,"#).unwrap();
+    let text = re.replace_all(&text, r#""time": <TIME>,"#);
+    let re = fancy_regex::Regex::new(r#""time":\d+,"#).unwrap();
+    let text = re.replace_all(&text, r#""time":<TIME>,"#);
     text.to_string()
 }
