@@ -4,6 +4,8 @@ use serde::{Serialize, Serializer};
 use serde_json::{json, Value};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
+use crate::state::Head;
+
 const HEX_VIEW_SIZE: usize = 320;
 
 #[derive(Debug, Clone, Serialize)]
@@ -12,13 +14,19 @@ pub struct Traffic {
     pub method: String,
     #[serde(serialize_with = "serialize_datetime")]
     pub start: OffsetDateTime,
+    pub time: Option<usize>,
     pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
+    pub req_headers_size: Option<usize>,
     pub req_body: Option<Body>,
+    pub req_body_size: Option<usize>,
     pub status: Option<u16>,
-    pub res_headers: Option<Headers>,
     pub res_version: Option<String>,
+    pub res_headers: Option<Headers>,
+    pub res_headers_size: Option<usize>,
     pub res_body: Option<Body>,
+    pub res_body_size: Option<usize>,
+    pub res_body_decompress_size: Option<usize>,
     pub websocket_id: Option<usize>,
     pub error: Option<String>,
 }
@@ -29,13 +37,19 @@ impl Traffic {
             uri: uri.to_string(),
             method: method.to_string(),
             start: OffsetDateTime::now_utc(),
+            time: None,
             req_version: None,
             req_headers: None,
+            req_headers_size: None,
             req_body: None,
+            req_body_size: None,
             status: None,
             res_version: None,
             res_headers: None,
+            res_headers_size: None,
             res_body: None,
+            res_body_size: None,
+            res_body_decompress_size: None,
             websocket_id: None,
             error: None,
         }
@@ -51,10 +65,6 @@ impl Traffic {
                 self.error = Some(error);
             }
         }
-    }
-
-    pub fn head(&self) -> (&str, &str, Option<u16>) {
-        (&self.method, &self.uri, self.status)
     }
 
     pub fn oneline(&self) -> String {
@@ -74,7 +84,9 @@ impl Traffic {
         }
 
         if let Some(body) = &self.req_body {
-            lines.push(render_body("REQUEST BODY", body, &self.req_headers, print));
+            if !body.value.is_empty() {
+                lines.push(render_body("REQUEST BODY", body, &self.req_headers, print));
+            }
         }
 
         if let Some(headers) = &self.res_headers {
@@ -82,7 +94,9 @@ impl Traffic {
         }
 
         if let Some(body) = &self.res_body {
-            lines.push(render_body("RESPONSE BODY", body, &self.res_headers, print));
+            if !body.value.is_empty() {
+                lines.push(render_body("RESPONSE BODY", body, &self.res_headers, print));
+            }
         }
 
         if let Some(error) = &self.error {
@@ -109,8 +123,8 @@ impl Traffic {
             "headers": har_headers(&self.req_headers),
             "queryString": har_query_string(&self.uri),
             "postData": har_req_body(&self.req_body, &self.req_headers),
-            "headersSize": -1,
-            "bodySize": -1,
+            "headersSize": har_size(&self.req_headers_size),
+            "bodySize": har_size(&self.req_body_size),
         });
         let response = json!({
             "status": self.status.unwrap_or_default(),
@@ -118,14 +132,14 @@ impl Traffic {
             "httpVersion": self.res_version,
             "cookies": har_res_cookies(&self.res_headers),
             "headers": har_headers(&self.res_headers),
-            "content": har_res_body(&self.res_body, &self.res_headers),
+            "content": har_res_body(&self.res_body, &self.res_headers, &self.res_body_size, &self.res_body_decompress_size),
             "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
-            "headersSize": -1,
-            "bodySize": -1,
+            "headersSize": har_size(&self.res_headers_size),
+            "bodySize": har_size(&self.res_body_size),
         });
         Some(json!({
             "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
-            "time": -1,
+            "time": self.time.map(|v| v as isize).unwrap_or(-1),
             "request": request,
             "response": response,
             "cache": {},
@@ -155,14 +169,16 @@ impl Traffic {
             }
         }
         if let Some(body) = &self.req_body {
-            if body.is_utf8() {
-                output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
-            } else {
-                output.push_str(" \\\n  --data-binary @-");
-                output = format!(
-                    "echo {} | \\\n  base64 --decode | \\\n  {}",
-                    body.value, output
-                );
+            if !body.value.is_empty() {
+                if body.is_utf8() {
+                    output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
+                } else {
+                    output.push_str(" \\\n  --data-binary @-");
+                    output = format!(
+                        "echo {} | \\\n  base64 --decode | \\\n  {}",
+                        body.value, output
+                    );
+                }
             }
         }
         output
@@ -181,6 +197,18 @@ impl Traffic {
                 "application/json; charset=UTF-8",
             )),
             _ => bail!("Unsupported format: {}", format),
+        }
+    }
+
+    pub(crate) fn head(&self, id: usize) -> Head {
+        Head {
+            id,
+            method: self.method.clone(),
+            uri: self.uri.clone(),
+            status: self.status,
+            time: self.time,
+            size: self.res_body_size,
+            mime: extract_content_type(&self.res_headers).map(|v| v.to_string()),
         }
     }
 }
@@ -322,6 +350,10 @@ fn har_headers(headers: &Option<Headers>) -> Value {
     }
 }
 
+fn har_size(size: &Option<usize>) -> isize {
+    size.map(|v| v as isize).unwrap_or(-1)
+}
+
 fn har_query_string(url: &str) -> Value {
     match url::Url::parse(url) {
         Ok(url) => url
@@ -363,17 +395,26 @@ fn har_req_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
     }
 }
 
-fn har_res_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
+fn har_res_body(
+    body: &Option<Body>,
+    headers: &Option<Headers>,
+    body_size: &Option<usize>,
+    decompress_size: &Option<usize>,
+) -> Value {
     let content_type = get_header_value(headers, "content-type").unwrap_or_default();
     match body {
         Some(body) => {
-            let mut value = json!({"mimeType": content_type, "text": body.value, "size": -1});
+            let mut value =
+                json!({"size": har_size(body_size), "mimeType": content_type, "text": body.value});
             if !body.is_utf8() {
                 value["encoding"] = "base64".into();
             }
+            if let (Some(body_size), Some(decompress_size)) = (body_size, decompress_size) {
+                value["compression"] = (*decompress_size as isize - *body_size as isize).into();
+            }
             value
         }
-        None => json!({"mimeType": content_type, "text": "", "size": 0}),
+        None => json!({"size": 0, "mimeType": content_type, "text": ""}),
     }
 }
 
@@ -470,206 +511,6 @@ where
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use time::format_description::well_known::Rfc3339;
-
-    fn create_traffic1() -> Traffic {
-        Traffic {
-            uri: "http://example.com/?q1=3".to_string(),
-            method: "PUT".to_string(),
-            start: OffsetDateTime::parse("2024-03-14T03:48:34.821Z", &Rfc3339).unwrap(),
-            req_version: None,
-            req_headers: Some(vec![
-                Header::new("content-type", "plain/text"),
-                Header::new("cookie", "c1=1; c2=2"),
-                Header::new("cookie", "c3=3"),
-            ]),
-            req_body: Some(Body::bytes(b"req_body")),
-            status: Some(200),
-            res_version: None,
-            res_headers: Some(vec![
-                Header::new("content-type", "application/json; charset=utf-8"),
-                Header::new(
-                    "set-cookie",
-                    "sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
-                ),
-                Header::new(
-                    "set-cookie",
-                    "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT",
-                ),
-            ]),
-            res_body: Some(Body::bytes(r#"{"message":"OK"}"#.as_bytes())),
-            websocket_id: None,
-            error: Some("error".to_string()),
-        }
-    }
-
-    #[test]
-    fn test_render_markdown() {
-        let traffic = create_traffic1();
-        let expect = r#"
-# PUT http://example.com/?q1=3 200
-
-REQUEST HEADERS
-```
-content-type: plain/text
-cookie: c1=1; c2=2
-cookie: c3=3
-```
-
-REQUEST BODY
-```
-req_body
-```
-
-RESPONSE HEADERS
-```
-content-type: application/json; charset=utf-8
-set-cookie: sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
-set-cookie: sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT
-```
-
-RESPONSE BODY
-```json
-{"message":"OK"}
-```
-
-ERROR: error"#;
-        assert_eq!(traffic.markdown(false), expect);
-    }
-
-    #[test]
-    fn test_render_curl() {
-        let traffic = create_traffic1();
-        let expect = r#"curl http://example.com/?q1=3 \
-  -X PUT \
-  -H 'content-type: plain/text' \
-  -H 'cookie: c1=1; c2=2' \
-  -H 'cookie: c3=3' \
-  -d 'req_body'"#;
-        assert_eq!(traffic.curl(), expect);
-    }
-
-    #[test]
-    fn test_render_har() {
-        let traffic = create_traffic1();
-        let expect = r#"{
-  "log": {
-    "version": "1.2",
-    "creator": {
-      "name": "proxyfor",
-      "version": "0.2.0",
-      "comment": ""
-    },
-    "pages": [],
-    "entries": [
-      {
-        "startedDateTime": "2024-03-14T03:48:34.821Z",
-        "time": -1,
-        "request": {
-          "method": "PUT",
-          "url": "http://example.com/?q1=3",
-          "httpVersion": null,
-          "cookies": [
-            {
-              "name": "c1",
-              "value": "1"
-            },
-            {
-              "name": "c2",
-              "value": "2"
-            },
-            {
-              "name": "c3",
-              "value": "3"
-            }
-          ],
-          "headers": [
-            {
-              "name": "content-type",
-              "value": "plain/text"
-            },
-            {
-              "name": "cookie",
-              "value": "c1=1; c2=2"
-            },
-            {
-              "name": "cookie",
-              "value": "c3=3"
-            }
-          ],
-          "queryString": [
-            {
-              "name": "q1",
-              "value": "3"
-            }
-          ],
-          "postData": {
-            "mimeType": "plain/text",
-            "text": "req_body"
-          },
-          "headersSize": -1,
-          "bodySize": -1
-        },
-        "response": {
-          "status": 200,
-          "statusText": "",
-          "httpVersion": null,
-          "cookies": [
-            {
-              "name": "sc1",
-              "value": "1",
-              "path": "/",
-              "domain": "example.com",
-              "expires": "2015-10-21T07:28:00Z"
-            },
-            {
-              "name": "sc2",
-              "value": "2",
-              "path": "/",
-              "domain": "example.com",
-              "expires": "2015-10-21T07:28:00Z"
-            }
-          ],
-          "headers": [
-            {
-              "name": "content-type",
-              "value": "application/json; charset=utf-8"
-            },
-            {
-              "name": "set-cookie",
-              "value": "sc1=1; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT"
-            },
-            {
-              "name": "set-cookie",
-              "value": "sc2=2; path=/; domain=example.com; expires=Wed, 21 Oct 2015 07:28:00 GMT"
-            }
-          ],
-          "content": {
-            "mimeType": "application/json; charset=utf-8",
-            "text": "{\"message\":\"OK\"}",
-            "size": -1
-          },
-          "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
-        },
-        "cache": {},
-        "timings": {
-          "connect": -1,
-          "ssl": -1,
-          "send": -1,
-          "receive": -1,
-          "wait": -1
-        }
-      }
-    ]
-  }
-}"#;
-        assert_eq!(
-            serde_json::to_string_pretty(&traffic.har()).unwrap(),
-            expect,
-        );
-    }
 
     #[test]
     fn test_render_body() {

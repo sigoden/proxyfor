@@ -6,7 +6,10 @@ expression: output
   {
     "id": 1,
     "method": "GET",
-    "uri": "http://localhost:port/hello",
-    "status": 200
+    "uri": "http://localhost:<PORT>/hello",
+    "status": 200,
+    "size": 13,
+    "time": <TIME>,
+    "mime": null
   }
 ]
