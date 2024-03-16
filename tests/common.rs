@@ -218,5 +218,7 @@ pub fn mask_text(text: &str) -> String {
     let text = re.replace_all(&text, "localhost:<PORT>");
     let re = fancy_regex::Regex::new(r#""time": \d+,"#).unwrap();
     let text = re.replace_all(&text, r#""time": <TIME>,"#);
+    let re = fancy_regex::Regex::new(r#""time":\d+,"#).unwrap();
+    let text = re.replace_all(&text, r#""time":<TIME>,"#);
     text.to_string()
 }
