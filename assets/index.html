@@ -901,7 +901,7 @@
                 if (trafficHead.status == 101) {
                     return "WEBSOCKET"
                 } else if (trafficHead.status == 304) {
-                    return "NOT-MODIF"
+                    return "NOTMODIFY"
                 } else if (trafficHead.status >= 300 && trafficHead.status < 400) {
                     return "REDIRECT"
                 }

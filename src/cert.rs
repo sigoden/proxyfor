@@ -1,13 +1,11 @@
 use anyhow::{anyhow, Context, Result};
 use http::uri::Authority;
 use moka::future::Cache;
-use rand::{rngs::OsRng, thread_rng, Rng};
+use rand::{thread_rng, Rng};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose, SanType,
+    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
+    IsCa, KeyPair, KeyUsagePurpose, RsaKeySize, SanType, PKCS_RSA_SHA256,
 };
-use rsa::pkcs8::EncodePrivateKey;
-use rsa::RsaPrivateKey;
 use std::{fs, io::Cursor, path::Path, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
@@ -19,37 +17,41 @@ const TTL_SECS: i64 = 365 * 24 * 60 * 60;
 const CACHE_TTL: u64 = TTL_SECS as u64 / 2;
 const NOT_BEFORE_OFFSET: i64 = 60;
 
-pub fn init_ca(ca_cert_file: &Path, private_key_file: &Path) -> Result<CertificateAuthority> {
+pub fn init_ca<T: AsRef<Path>>(
+    ca_cert_file: T,
+    private_key_file: T,
+) -> Result<CertificateAuthority> {
+    let ca_cert_file = ca_cert_file.as_ref();
+    let private_key_file = private_key_file.as_ref();
     let (private_key, ca_cert, ca_data) = if !ca_cert_file.exists() {
-        let key = gen_private_key().with_context(|| "Failed to generate private key")?;
-        let ca_cert = gen_ca_cert(&key).with_context(|| "Failed to generate CA certificate")?;
-        let ca_data = ca_cert
-            .serialize_pem()
-            .with_context(|| "Failed to generate CA certificate")?;
-        fs::write(ca_cert_file, &ca_data).with_context(|| {
+        let private_key = rcgen::KeyPair::generate_rsa_for(&PKCS_RSA_SHA256, RsaKeySize::_2048)
+            .with_context(|| "Failed to generate private key")?;
+        let ca_cert =
+            gen_ca_cert(&private_key).with_context(|| "Failed to generate CA certificate")?;
+        fs::write(ca_cert_file, ca_cert.pem()).with_context(|| {
             format!(
                 "Failed to save CA certificate to '{}'",
                 ca_cert_file.display()
             )
         })?;
-        fs::write(private_key_file, key.serialize_pem()).with_context(|| {
+        fs::write(private_key_file, private_key.serialize_pem()).with_context(|| {
             format!(
                 "Failed to save private key to '{}'",
                 private_key_file.display()
             )
         })?;
-        (key, ca_cert, ca_data)
+        let ca_data = ca_cert.pem();
+        (private_key, ca_cert, ca_data)
     } else {
-        let key_err = || {
+        let private_key_err = || {
             format!(
                 "Failed to read private key at '{}'",
                 private_key_file.display()
             )
         };
-        let key_data = fs::read_to_string(private_key_file).with_context(key_err)?;
-        let key = KeyPair::from_pem(&key_data).with_context(key_err)?;
-        let key_clone = KeyPair::from_pem(&key_data).with_context(key_err)?;
-
+        let private_key_data =
+            fs::read_to_string(private_key_file).with_context(private_key_err)?;
+        let private_key = KeyPair::from_pem(&private_key_data).with_context(private_key_err)?;
         let ca_err = || {
             format!(
                 "Failed to read CA certificate at '{}'",
@@ -57,14 +59,13 @@ pub fn init_ca(ca_cert_file: &Path, private_key_file: &Path) -> Result<Certifica
             )
         };
         let ca_data = fs::read_to_string(ca_cert_file).with_context(ca_err)?;
-        let ca_params =
-            CertificateParams::from_ca_cert_pem(&ca_data, key_clone).with_context(ca_err)?;
-        let ca_cert = Certificate::from_params(ca_params).with_context(ca_err)?;
-        (key, ca_cert, ca_data)
+        let ca_params = CertificateParams::from_ca_cert_pem(&ca_data).with_context(ca_err)?;
+        let ca_cert = ca_params.self_signed(&private_key).with_context(ca_err)?;
+        (private_key, ca_cert, ca_data)
     };
 
-    let mut key_reader = Cursor::new(private_key.serialize_pem());
-    let key_der = rustls_pemfile::read_one(&mut key_reader)
+    let mut private_key_reader = Cursor::new(private_key.serialize_pem());
+    let private_key_der = rustls_pemfile::read_one(&mut private_key_reader)
         .ok()
         .flatten()
         .and_then(|key| match key {
@@ -75,7 +76,7 @@ pub fn init_ca(ca_cert_file: &Path, private_key_file: &Path) -> Result<Certifica
         })
         .ok_or_else(|| anyhow!("Invalid private key"))?;
 
-    let ca = CertificateAuthority::new(private_key, key_der, ca_cert, ca_data, 1_000);
+    let ca = CertificateAuthority::new(private_key, private_key_der, ca_cert, ca_data, 1_000);
     Ok(ca)
 }
 
@@ -146,37 +147,12 @@ impl CertificateAuthority {
             .push(DnType::CommonName, authority.host());
         params
             .subject_alt_names
-            .push(SanType::DnsName(authority.host().into()));
+            .push(SanType::DnsName(Ia5String::try_from(authority.host())?));
 
-        params.alg = self
-            .private_key
-            .compatible_algs()
-            .next()
-            .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
-
-        let private_key_clone = KeyPair::from_pem(&self.private_key.serialize_pem())?;
-        params.key_pair = Some(private_key_clone);
-
-        let cert = Certificate::from_params(params)?;
-        let cert_data = cert.serialize_pem_with_signer(&self.ca_cert)?;
-
-        let mut cert_reader = Cursor::new(cert_data.as_bytes());
-        let cert = rustls_pemfile::certs(&mut cert_reader)
-            .next()
-            .and_then(|v| v.ok())
-            .ok_or_else(|| anyhow!("Invalid generated certificate"))?;
-
-        Ok(cert)
+        let cert = params.signed_by(&self.private_key, &self.ca_cert, &self.private_key)?;
+        let cert_der = cert.der().clone();
+        Ok(cert_der)
     }
-}
-
-fn gen_private_key() -> Result<KeyPair> {
-    let mut rng = OsRng;
-    let bits = 2048;
-    let private_key = RsaPrivateKey::new(&mut rng, bits)?;
-    let private_key_der = private_key.to_pkcs8_der()?;
-    let private_key = KeyPair::try_from(private_key_der.as_bytes())?;
-    Ok(private_key)
 }
 
 fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
@@ -197,15 +173,8 @@ fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
     params.key_usages.push(KeyUsagePurpose::KeyCertSign);
     params.key_usages.push(KeyUsagePurpose::CrlSign);
 
-    params.alg = key
-        .compatible_algs()
-        .next()
-        .ok_or_else(|| anyhow!("Failed to find compatible algorithm"))?;
+    let ca_cert = params.self_signed(key)?;
 
-    let private_key_clone = KeyPair::from_pem(&key.serialize_pem())?;
-    params.key_pair = Some(private_key_clone);
-
-    let ca_cert = Certificate::from_params(params)?;
     Ok(ca_cert)
 }
 
