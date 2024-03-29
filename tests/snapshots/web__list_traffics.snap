@@ -43,6 +43,7 @@ REQUEST HEADERS
 ```
 accept: */*
 host: localhost:<PORT>
+content-length: 0
 ```
 
 RESPONSE HEADERS
@@ -63,6 +64,7 @@ REQUEST HEADERS
 ```
 accept: */*
 host: localhost:<PORT>
+content-length: 0
 ```
 
 RESPONSE HEADERS
@@ -133,6 +135,10 @@ Hello, World!
             {
               "name": "host",
               "value": "localhost:<PORT>"
+            },
+            {
+              "name": "content-length",
+              "value": "0"
             }
           ],
           "queryString": [],
@@ -140,7 +146,7 @@ Hello, World!
             "mimeType": "",
             "text": ""
           },
-          "headersSize": 59,
+          "headersSize": 86,
           "bodySize": 0
         },
         "response": {
@@ -193,6 +199,10 @@ Hello, World!
             {
               "name": "host",
               "value": "localhost:<PORT>"
+            },
+            {
+              "name": "content-length",
+              "value": "0"
             }
           ],
           "queryString": [],
@@ -200,7 +210,7 @@ Hello, World!
             "mimeType": "",
             "text": ""
           },
-          "headersSize": 59,
+          "headersSize": 86,
           "bodySize": 0
         },
         "response": {

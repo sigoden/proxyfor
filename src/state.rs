@@ -140,12 +140,8 @@ impl State {
     }
 
     pub(crate) fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
-        let Ok(websockets) = self.websockets.lock() else {
-            return None;
-        };
-        let Some(messages) = websockets.get(&id) else {
-            return None;
-        };
+        let websockets = self.websockets.lock().ok()?;
+        let messages = websockets.get(&id)?;
         Some((messages.to_vec(), self.websockets_notifier.subscribe()))
     }
 }
