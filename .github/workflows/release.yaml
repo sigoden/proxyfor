@@ -53,6 +53,7 @@ jobs:
         - target: arm-unknown-linux-musleabihf
           os: ubuntu-latest
           use-cross: true
+          cargo-flags: ""
 
     runs-on: ${{matrix.os}}
     env:
