@@ -36,6 +36,10 @@ jobs:
 
     - uses: Swatinem/rust-cache@v2
 
+    - name: Install NASM for aws-lc-rs on Windows
+      if: runner.os == 'Windows'
+      uses: ilammy/setup-nasm@v1
+
     - name: Test
       run: cargo test --all
 

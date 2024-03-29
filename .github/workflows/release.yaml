@@ -72,6 +72,10 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Install NASM for aws-lc-rs on Windows
+      if: runner.os == 'Windows'
+      uses: ilammy/setup-nasm@v1
+
     - name: Install cross
       if: matrix.use-cross
       uses: taiki-e/install-action@v2
