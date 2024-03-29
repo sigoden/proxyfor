@@ -23,7 +23,7 @@ futures-util = "0.3.30"
 http = "1.1.0"
 http-body-util = "0.1"
 hyper = { version = "1.0", features = ["full"] }
-hyper-rustls = { version = "0.27.0", default-features = false, features = ["webpki-roots", "webpki-tokio", "aws-lc-rs", "http1", "http2", "tls12"] }
+hyper-rustls = { version = "0.26.0", default-features = false, features = ["webpki-roots", "webpki-tokio", "ring", "http1", "http2", "tls12"] }
 hyper-util = { version = "0.1", features = ["server-auto", "client-legacy"] }
 hyper-tungstenite = "0.13.0"
 indexmap = { version = "2.2.5", features = ["serde"] }
@@ -31,7 +31,8 @@ moka = { version = "0.12.5", features = ["future"] }
 pin-project-lite = "0.2.13"
 pretty-hex = "0.4.1"
 rand = "0.8.5"
-rcgen = { version = "0.13.0", default-features = false, features = ["x509-parser", "pem", "aws_lc_rs"] }
+rcgen = { version = "0.13.0", default-features = false, features = ["x509-parser", "pem", "ring"] }
+rsa = "0.9.6"
 rustls-pemfile = "2.0.0"
 serde = { version = "1.0.197", features = ["derive"] }
 serde_json = { version = "1.0.114", features = ["preserve_order"] }
@@ -39,7 +40,7 @@ time = "0.3.34"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
 tokio-graceful = "0.1.6"
 tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
-tokio-rustls = "0.26.0"
+tokio-rustls = "0.25.0"
 tokio-stream = { version = "0.1.14", default-features = false, features = ["sync"] }
 tokio-tungstenite = { version = "0.21.0", features = ["rustls-tls-webpki-roots"] }
 url = "2.5.0"
