@@ -220,5 +220,7 @@ pub fn mask_text(text: &str) -> String {
     let text = re.replace_all(&text, r#""time": <TIME>,"#);
     let re = fancy_regex::Regex::new(r#""time":\d+,"#).unwrap();
     let text = re.replace_all(&text, r#""time":<TIME>,"#);
+    let re = fancy_regex::Regex::new(r#""version": "\S+","#).unwrap();
+    let text = re.replace_all(&text, r#""version": "<VERSION>","#);
     text.to_string()
 }

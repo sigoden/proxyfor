@@ -111,10 +111,10 @@ Hello, World!
 
 {
   "log": {
-    "version": "1.2",
+    "version": "<VERSION>",
     "creator": {
       "name": "proxyfor",
-      "version": "0.2.0",
+      "version": "<VERSION>",
       "comment": ""
     },
     "pages": [],
