@@ -1,11 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use http::uri::Authority;
 use moka::future::Cache;
-use rand::{thread_rng, Rng};
+use rand::{rngs::OsRng, thread_rng, Rng};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String,
-    IsCa, KeyPair, KeyUsagePurpose, RsaKeySize, SanType, PKCS_RSA_SHA256,
+    IsCa, KeyPair, KeyUsagePurpose, SanType,
 };
+use rsa::{pkcs8::EncodePrivateKey, RsaPrivateKey};
 use std::{fs, io::Cursor, path::Path, sync::Arc};
 use time::{Duration, OffsetDateTime};
 use tokio_rustls::rustls::{
@@ -24,8 +25,7 @@ pub fn init_ca<T: AsRef<Path>>(
     let ca_cert_file = ca_cert_file.as_ref();
     let private_key_file = private_key_file.as_ref();
     let (private_key, ca_cert, ca_data) = if !ca_cert_file.exists() {
-        let private_key = rcgen::KeyPair::generate_rsa_for(&PKCS_RSA_SHA256, RsaKeySize::_2048)
-            .with_context(|| "Failed to generate private key")?;
+        let private_key = gen_private_key().with_context(|| "Failed to generate private key")?;
         let ca_cert =
             gen_ca_cert(&private_key).with_context(|| "Failed to generate CA certificate")?;
         fs::write(ca_cert_file, ca_cert.pem()).with_context(|| {
@@ -176,6 +176,15 @@ fn gen_ca_cert(key: &KeyPair) -> Result<Certificate> {
     let ca_cert = params.self_signed(key)?;
 
     Ok(ca_cert)
+}
+
+fn gen_private_key() -> Result<KeyPair> {
+    let mut rng = OsRng;
+    let bits = 2048;
+    let private_key = RsaPrivateKey::new(&mut rng, bits)?;
+    let private_key_der = private_key.to_pkcs8_der()?;
+    let private_key = KeyPair::try_from(private_key_der.as_bytes())?;
+    Ok(private_key)
 }
 
 fn validity_period() -> (OffsetDateTime, OffsetDateTime) {
