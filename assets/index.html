@@ -6,9 +6,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>proxyfor</title>
     <link rel="icon" href="data:,">
-    <link rel="stylesheet" href="https://unpkg.com/reset-css@5.0.2/reset.css">
     <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/styles/stackoverflow-light.min.css">
     <style>
+        body,
+        div,
+        span,
+        a,
+        button,
+        pre,
+        code,
+        table,
+        tbody,
+        thead,
+        th,
+        tr,
+        td {
+            margin: 0;
+            padding: 0;
+            border: 0;
+            font-size: 100%;
+            font: inherit;
+            vertical-align: baseline;
+        }
+
+        table {
+            border-collapse: collapse;
+            border-spacing: 0;
+        }
+
         body {
             display: flex;
             height: 100vh;
@@ -32,7 +57,7 @@
             flex-direction: column;
             flex: 1;
             border: 1px solid #ccc;
-            width: 50%;
+            width: 50vh;
         }
 
         .left-panel {
@@ -175,10 +200,6 @@
             overflow-x: hidden;
             overflow-y: auto;
         }
-        
-        .main-view {
-            overflow-wrap: anywhere;
-        }
 
         .firstline {
             font-family: Menlo, Monaco, Consolas, "Courier New", monospace;
@@ -206,6 +227,11 @@
         }
 
         .code-view {
+            display: flex;
+            align-items: center;
+        }
+
+        .code-view pre {
             display: block;
             padding: 10px;
             margin: 0 0 10px;
