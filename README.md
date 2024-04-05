@@ -4,7 +4,7 @@
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
 [![Docker Pulls](https://img.shields.io/docker/pulls/sigoden/proxyfor)](https://hub.docker.com/r/sigoden/proxyfor)
 
-A lightweight proxy for monitoring HTTP, HTTPS, and WebSocket traffic.
+A lightweight proxy for capturing HTTP(S) and WS(S) traffic.
 
 ## Features
 
