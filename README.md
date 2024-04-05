@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml/badge.svg)](https://github.com/sigoden/proxyfor/actions/workflows/ci.yaml)
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
+[![Docker Pulls](https://img.shields.io/docker/pulls/sigoden/proxyfor)](https://hub.docker.com/r/sigoden/proxyfor)
 
 A lightweight proxy for monitoring HTTP, HTTPS, and WebSocket traffic.
 
@@ -21,6 +22,12 @@ A lightweight proxy for monitoring HTTP, HTTPS, and WebSocket traffic.
 
 ```
 cargo install proxyfor
+```
+
+### With docker
+
+```
+docker run -v ~/.proxyfor:/.proxyfor -p 8080:8080 --rm sigoden/proxyfor --web 
 ```
 
 ### Binaries on macOS, Linux, Windows
@@ -51,12 +58,13 @@ $ proxyfor https://httpbin.org
 $ curl http://127.0.0.1:8080/ip
 ```
 
-
-![reverse-proxy](https://github.com/sigoden/proxyfor/assets/4012553/789ad353-9fe3-4bff-9f47-f19fd8dc5ce6)
-
 ## Web Interface
 
 Proxyfor provides a web-based user interface that allows you to interactively inspect the HTTP traffic. All traffic is kept in memory, which means that it’s intended for small-ish samples.
+
+```sh
+$ proxyfor --web
+```
 
 ![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/fef38f0c-ff7d-4b90-a9f0-a8c10c44c38c)
 
