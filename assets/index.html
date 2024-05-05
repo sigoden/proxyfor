@@ -505,7 +505,7 @@
                     let buf = "";
                     let decoder = new TextDecoder();
                     let reader = res.body.getReader();
-                    reader.read().then(function handleNDJson({ value, done }) {
+                    reader.read().then(function handleNdjson({ value, done }) {
                         if (done) {
                             buf = buf.trim();
                         } else {
@@ -518,7 +518,7 @@
                             handleNewTraffic(traffic);
                         }
                         buf = lines[lines.length - 1];
-                        return reader.read().then(handleNDJson);
+                        return reader.read().then(handleNdjson);
                     });
                 })
                 .catch((err) => {
@@ -738,7 +738,7 @@
                     let buf = "";
                     let decoder = new TextDecoder();
                     let reader = res.body.getReader();
-                    reader.read().then(function handleNDJson({ value, done }) {
+                    reader.read().then(function handleNdjson({ value, done }) {
                         if (done) {
                             buf = buf.trim();
                         } else {
@@ -753,7 +753,7 @@
                             } catch { }
                         }
                         buf = lines[lines.length - 1];
-                        return reader.read().then(handleNDJson);
+                        return reader.read().then(handleNdjson);
                     });
                 })
                 .catch((err) => {
@@ -798,7 +798,7 @@
         function tmplTrafficReq(traffic) {
             return [
                 `<div class="firstline">${traffic.method} ${traffic.uri} ${traffic.req_version || ""}</div>`,
-                tmplHaders(traffic.req_headers),
+                tmplHeaders(traffic.req_headers),
                 tmplBody(traffic.req_body, traffic.req_headers),
             ].join("");
         }
@@ -809,7 +809,7 @@
         function tmplTrafficRes(traffic) {
             return [
                 `<div class="firstline">${[traffic.res_version || "", traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
-                tmplHaders(traffic.res_headers),
+                tmplHeaders(traffic.res_headers),
                 tmplBody(traffic.res_body, traffic.res_headers),
             ].join("");
         }
@@ -817,7 +817,7 @@
         /**
          * @param {?Header[]} headers
          */
-        function tmplHaders(headers) {
+        function tmplHeaders(headers) {
             return (headers || []).map(({ name, value }) =>
                 `<div class="header-line"><span class="header-key">${name}</span>:&nbsp;<span class="header-value">${value}</span></div>`
             ).join("");
