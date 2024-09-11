@@ -18,6 +18,9 @@ const PRIVATE_KEY_FILENAME: &str = "proxyfor-key.pem";
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
+    tokio_rustls::rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
     let ca = setup_ca()?;
     let (ip, port) =
         parse_addr(&cli.listen).ok_or_else(|| anyhow!("Invalid addr '{}'", cli.listen))?;
