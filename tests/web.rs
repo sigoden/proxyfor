@@ -8,7 +8,8 @@ use crate::common::{
 use anyhow::Result;
 use async_http_proxy::http_connect_tokio;
 use futures_util::SinkExt;
-use proxyfor::server::WEB_PREFIX;
+use proxyfor::{server::WEB_PREFIX, traffic::TrafficHead};
+use std::time::Duration;
 use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -157,9 +158,22 @@ async fn test_get_traffic() -> Result<()> {
 
     assert_eq!(res.status(), 200);
 
-    let mut output = vec![];
+    let client = build_client()?;
+    let res = client
+        .get(format!(
+            "http://localhost:{}{}/traffics",
+            proxy_addr.port(),
+            WEB_PREFIX
+        ))
+        .send()
+        .await?;
 
-    let id = 1;
+    assert_eq!(res.status(), 200);
+
+    let output = res.text().await?;
+    let values: Vec<TrafficHead> = serde_json::from_str(&output)?;
+
+    let id = values[0].id;
     let client = build_client()?;
     let res = client
         .get(format!(
@@ -173,8 +187,7 @@ async fn test_get_traffic() -> Result<()> {
 
     assert_eq!(res.status(), 200);
 
-    output.push("/traffic/:id".into());
-    output.push(res.text().await?);
+    let mut output = vec!["/traffic/:id".into(), res.text().await?];
 
     let client = build_client()?;
     let res = client
@@ -258,7 +271,7 @@ async fn test_subscribe_traffics() -> Result<()> {
             proxy_addr.port(),
             WEB_PREFIX,
         ),
-        2,
+        Duration::from_millis(1500),
     )
     .await?;
 
@@ -298,7 +311,7 @@ async fn test_subscribe_websocket() -> Result<()> {
             proxy_addr.port(),
             WEB_PREFIX,
         ),
-        4,
+        Duration::from_millis(1500),
     )
     .await?;
 

@@ -1,13 +1,12 @@
 use crate::{
     cert::CertificateAuthority,
     filter::{is_match_title, is_match_type, TitleFilter},
-    recorder::{ErrorRecorder, Recorder},
     rewind::Rewind,
     state::State,
+    traffic::Traffic,
 };
 
-use anyhow::{anyhow, Result};
-use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder};
+use anyhow::{anyhow, Context as _, Result};
 use bytes::Bytes;
 use futures_util::{stream, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use http::{
@@ -21,7 +20,7 @@ use http::{
 use http_body_util::{combinators::BoxBody, BodyExt, Full, StreamBody};
 use hyper::{
     body::{Body, Frame, Incoming},
-    header::{CONTENT_ENCODING, HOST},
+    header::HOST,
     service::service_fn,
     upgrade::Upgraded,
     Method, StatusCode, Uri,
@@ -32,25 +31,35 @@ use hyper_util::{
     client::legacy::{connect::HttpConnector, Client},
     rt::{TokioExecutor, TokioIo},
 };
+use pin_project_lite::pin_project;
 use serde::Serialize;
-use std::{sync::Arc, time::Instant};
+use std::{
+    fs::File,
+    io::Write,
+    path::PathBuf,
+    pin::Pin,
+    process,
+    sync::Arc,
+    task::{Context, Poll},
+};
 use tokio::{
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite},
     net::{TcpListener, TcpStream},
-    sync::oneshot,
+    sync::{mpsc, oneshot},
 };
 use tokio_graceful::Shutdown;
 use tokio_rustls::TlsAcceptor;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_tungstenite::tungstenite;
 
-const WEB_INDEX: &str = include_str!("../assets/index.html");
-const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
 pub const CERT_PREFIX: &str = "http://proxyfor.local/";
 pub const WEB_PREFIX: &str = "/__proxyfor__";
+const WEB_INDEX: &str = include_str!("../assets/index.html");
+const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
+type TrafficDoneSender = mpsc::UnboundedSender<usize>;
 
 pub struct ServerBuilder {
     ca: CertificateAuthority,
@@ -98,14 +107,15 @@ impl ServerBuilder {
     }
 
     pub fn build(self) -> Arc<Server> {
+        let temp_dir = std::env::temp_dir().join(format!("proxyfor-{}", process::id()));
         Arc::new(Server {
             ca: self.ca,
             reverse_proxy_url: self.reverse_proxy_url,
             title_filters: self.title_filters,
             mime_filters: self.mime_filters,
             web: self.web,
-            print_mode: self.print_mode,
-            state: State::new(),
+            state: State::new(self.print_mode),
+            temp_dir,
         })
     }
 }
@@ -116,15 +126,19 @@ pub struct Server {
     title_filters: Vec<TitleFilter>,
     mime_filters: Vec<String>,
     web: bool,
-    print_mode: PrintMode,
     state: State,
+    temp_dir: PathBuf,
 }
 
 impl Server {
     pub async fn run(self: Arc<Self>, listener: TcpListener) -> Result<oneshot::Sender<()>> {
-        let (tx, rx) = oneshot::channel();
+        std::fs::create_dir_all(&self.temp_dir)
+            .with_context(|| format!("Failed to create temp dir '{}'", self.temp_dir.display()))?;
+        let (stop_tx, stop_rx) = oneshot::channel();
+        let (traffic_done_tx, mut traffic_done_rx) = mpsc::unbounded_channel();
+        let server_cloned = self.clone();
         tokio::spawn(async move {
-            let shutdown = Shutdown::new(async { rx.await.unwrap_or_default() });
+            let shutdown = Shutdown::new(async { stop_rx.await.unwrap_or_default() });
             let guard = shutdown.guard_weak();
 
             loop {
@@ -135,10 +149,11 @@ impl Server {
                         };
 
                         let stream = TokioIo::new(cnx);
-                        let server = self.clone();
+                        let traffic_done_tx = traffic_done_tx.clone();
+                        let server_cloned = server_cloned.clone();
                         shutdown.spawn_task(async move {
                             let hyper_service = service_fn(move |request: hyper::Request<Incoming>| {
-                                server.clone().handle(request)
+                                server_cloned.clone().handle(request, traffic_done_tx.clone())
                             });
                             let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
                                 .serve_connection_with_upgrades(stream, hyper_service)
@@ -151,10 +166,19 @@ impl Server {
                 }
             }
         });
-        Ok(tx)
+        tokio::spawn(async move {
+            while let Some(id) = traffic_done_rx.recv().await {
+                self.state.done_traffic(id).await;
+            }
+        });
+        Ok(stop_tx)
     }
 
-    async fn handle(self: Arc<Self>, req: Request) -> Result<Response, hyper::Error> {
+    async fn handle(
+        self: Arc<Self>,
+        req: Request,
+        traffic_done_tx: TrafficDoneSender,
+    ) -> Result<Response, hyper::Error> {
         let req_uri = req.uri().to_string();
         let method = req.method().clone();
 
@@ -163,8 +187,10 @@ impl Server {
         } else if let Some(base_url) = &self.reverse_proxy_url {
             format!("{base_url}{req_uri}")
         } else {
-            let recorder = Recorder::new(&req_uri, method.as_str(), self.print_mode);
-            return self.internal_server_error("No reserver proxy url", recorder);
+            let mut res = Response::default();
+            *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            set_res_body(&mut res, "No reserver proxy url");
+            return Ok(res);
         };
 
         let path = match uri.split_once('?') {
@@ -176,7 +202,7 @@ impl Server {
             let mut res = Response::default();
             if let Err(err) = self.handle_cert_index(&mut res, path).await {
                 *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                set_res_body(&mut res, err.to_string());
+                set_res_body(&mut res, err);
             };
             return Ok(res);
         } else if let Some(path) = path.strip_prefix(WEB_PREFIX) {
@@ -185,7 +211,7 @@ impl Server {
                 *res.status_mut() = StatusCode::BAD_REQUEST;
                 set_res_body(
                     &mut res,
-                    "The web interface is disabled. To enable it, run the command with the `--web` flag.".to_string(),
+                    "The web interface is disabled. To enable it, run the command with the `--web` flag.",
                 );
                 return Ok(res);
             }
@@ -212,31 +238,33 @@ impl Server {
             };
             if let Err(err) = ret {
                 *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
-                set_res_body(&mut res, err.to_string());
+                set_res_body(&mut res, err);
             }
             return Ok(res);
         }
 
-        let mut recorder = Recorder::new(&req_uri, method.as_str(), self.print_mode);
+        let mut traffic = Traffic::new(&req_uri, method.as_str());
 
         let req_version = req.version();
-        recorder.set_req_version(&req_version);
+        traffic.set_req_version(&req_version);
 
-        recorder.check_match(is_match_title(
+        traffic.check_match(is_match_title(
             &self.title_filters,
             &format!("{method} {uri}"),
         ));
 
         if method == Method::CONNECT {
-            recorder.check_match(!self.title_filters.is_empty() || !self.mime_filters.is_empty());
-            return self.handle_connect(req, recorder);
+            traffic.check_match(!self.title_filters.is_empty() || !self.mime_filters.is_empty());
+            return self.handle_connect(req, traffic, traffic_done_tx);
         }
 
-        recorder.set_req_headers(req.headers());
+        traffic.set_req_headers(req.headers());
 
         if hyper_tungstenite::is_upgrade_request(&req) {
             let uri: Uri = uri.parse().expect("Invalid uri");
-            return self.handle_upgrade_websocket(req, uri, recorder).await;
+            return self
+                .handle_upgrade_websocket(req, uri, traffic, traffic_done_tx.clone())
+                .await;
         }
 
         let mut builder = hyper::Request::builder()
@@ -251,23 +279,26 @@ impl Server {
             builder = builder.header(key.clone(), value.clone());
         }
 
-        let req_body = match req.collect().await {
-            Ok(v) => v.to_bytes(),
-            Err(err) => {
-                return self.internal_server_error(err, recorder);
+        let req_body_file = if traffic.valid {
+            match self.req_body_file(&mut traffic) {
+                Ok(v) => Some(v),
+                Err(err) => {
+                    return self.internal_server_error(err, traffic).await;
+                }
             }
+        } else {
+            None
         };
+        let req_body = BodyWrapper::new(req.into_body(), req_body_file, None);
 
-        recorder.set_req_body(&req_body);
-
-        let proxy_req = match builder.body(Full::new(req_body)) {
+        let proxy_req = match builder.body(req_body) {
             Ok(v) => v,
             Err(err) => {
-                return self.internal_server_error(err, recorder);
+                return self.internal_server_error(err, traffic).await;
             }
         };
 
-        let start = Instant::now();
+        traffic.start_record_time();
         let builder = Client::builder(TokioExecutor::new());
         let proxy_res = if uri.starts_with("https://") {
             builder
@@ -287,16 +318,17 @@ impl Server {
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                return self.internal_server_error(err, recorder);
+                return self.internal_server_error(err, traffic).await;
             }
         };
 
-        self.process_proxy_res(proxy_res, recorder, start).await
+        self.process_proxy_res(proxy_res, traffic, traffic_done_tx)
+            .await
     }
 
     async fn handle_cert_index(&self, res: &mut Response, path: &str) -> Result<()> {
         if path.is_empty() {
-            set_res_body(res, CERT_INDEX.to_string());
+            set_res_body(res, CERT_INDEX);
             res.headers_mut().insert(
                 CONTENT_TYPE,
                 HeaderValue::from_static("text/html; charset=UTF-8"),
@@ -319,7 +351,7 @@ impl Server {
     }
 
     async fn handle_web_index(&self, res: &mut Response) -> Result<()> {
-        set_res_body(res, WEB_INDEX.to_string());
+        set_res_body(res, WEB_INDEX);
         res.headers_mut().insert(
             CONTENT_TYPE,
             HeaderValue::from_static("text/html; charset=UTF-8"),
@@ -330,7 +362,10 @@ impl Server {
     }
 
     async fn handle_subscribe_traffics(&self, res: &mut Response) -> Result<()> {
-        let (init_data, receiver) = (self.state.list_heads(), self.state.subscribe_traffics());
+        let (init_data, receiver) = (
+            self.state.list_heads().await,
+            self.state.subscribe_traffics(),
+        );
         let stream = BroadcastStream::new(receiver);
         let stream = stream
             .map_ok(|head| ndjson_frame(&head))
@@ -354,27 +389,24 @@ impl Server {
     }
 
     async fn handle_list_traffics(&self, res: &mut Response, query: &str) -> Result<()> {
-        if query.is_empty() {
-            set_res_body(res, serde_json::to_string_pretty(&self.state.list_heads())?);
-            res.headers_mut().insert(
-                CONTENT_TYPE,
-                HeaderValue::from_static("application/json; charset=UTF-8"),
-            );
-        } else {
-            let (data, mime) = self.state.export_traffics(query)?;
-            set_res_body(res, data);
-            res.headers_mut()
-                .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
-        }
+        let (data, mime) = self.state.export_traffics(query).await?;
+        set_res_body(res, data);
+        res.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
         res.headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         Ok(())
     }
 
     async fn handle_get_traffic(&self, res: &mut Response, id: &str, query: &str) -> Result<()> {
-        match id.parse().ok().and_then(|id| self.state.get_traffic(id)) {
+        let Ok(id) = id.parse() else {
+            *res.status_mut() = StatusCode::BAD_REQUEST;
+            set_res_body(res, "Invalid id");
+            return Ok(());
+        };
+        match self.state.get_traffic(id).await {
             Some(traffic) => {
-                let (data, mime) = traffic.export(query)?;
+                let (data, mime) = traffic.export(query).await?;
                 set_res_body(res, data);
                 res.headers_mut()
                     .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
@@ -390,11 +422,12 @@ impl Server {
 
     async fn handle_subscribe_websocket(&self, res: &mut Response, id: &str) -> Result<()> {
         let Ok(id) = id.parse() else {
-            *res.status_mut() = StatusCode::NOT_FOUND;
+            *res.status_mut() = StatusCode::BAD_REQUEST;
+            set_res_body(res, "Invalid id");
             return Ok(());
         };
 
-        let Some((messages, receiver)) = self.state.subscribe_websocket(id) else {
+        let Some((messages, receiver)) = self.state.subscribe_websocket(id).await else {
             *res.status_mut() = StatusCode::NOT_FOUND;
             return Ok(());
         };
@@ -438,7 +471,8 @@ impl Server {
         self: Arc<Self>,
         req: Request,
         uri: Uri,
-        mut recorder: Recorder,
+        mut traffic: Traffic,
+        traffic_done_tx: TrafficDoneSender,
     ) -> Result<Response, hyper::Error> {
         let mut req = {
             let (mut parts, _) = req.into_parts();
@@ -455,7 +489,9 @@ impl Server {
                 match Uri::from_parts(parts) {
                     Ok(uri) => uri,
                     Err(err) => {
-                        return self.internal_server_error(format!("Invalid uri, {err}"), recorder);
+                        return self
+                            .internal_server_error(format!("Invalid uri, {err}"), traffic)
+                            .await;
                     }
                 }
             };
@@ -463,16 +499,11 @@ impl Server {
             hyper::Request::from_parts(parts, ())
         };
 
-        let start = Instant::now();
+        traffic.start_record_time();
         match hyper_tungstenite::upgrade(&mut req, None) {
             Ok((proxy_res, websocket)) => {
-                let Some(id) = self.state.new_websocket() else {
-                    return self.internal_server_error(
-                        "Failed to record the websocket".to_string(),
-                        recorder,
-                    );
-                };
-                recorder.set_websocket_id(id);
+                let id = self.state.new_websocket().await;
+                traffic.set_websocket_id(id);
 
                 let server = self.clone();
                 let fut = async move {
@@ -480,26 +511,38 @@ impl Server {
                         Ok(ws) => {
                             let server_cloned = server.clone();
                             if let Err(err) = server_cloned.handle_websocket(ws, req, id).await {
-                                server.state.add_websocket_error(
-                                    id,
-                                    format!("Failed to handle WebSocket: {}", err),
-                                );
+                                server
+                                    .state
+                                    .add_websocket_error(
+                                        id,
+                                        format!("Failed to handle WebSocket: {}", err),
+                                    )
+                                    .await;
                             }
                         }
                         Err(err) => {
-                            server.state.add_websocket_error(
-                                id,
-                                format!("Failed to upgrade to WebSocket: {}", err),
-                            );
+                            server
+                                .state
+                                .add_websocket_error(
+                                    id,
+                                    format!("Failed to upgrade to WebSocket: {}", err),
+                                )
+                                .await;
                         }
                     }
                 };
 
                 tokio::spawn(fut);
-                self.process_proxy_res(proxy_res, recorder, start).await
+                self.process_proxy_res(proxy_res, traffic, traffic_done_tx)
+                    .await
             }
-            Err(err) => self
-                .internal_server_error(format!("Failed to upgrade to websocket, {err}"), recorder),
+            Err(err) => {
+                self.internal_server_error(
+                    format!("Failed to upgrade to websocket, {err}"),
+                    traffic,
+                )
+                .await
+            }
         }
     }
 
@@ -543,25 +586,31 @@ impl Server {
             match message {
                 Ok(message) => {
                     self.state
-                        .add_websocket_message(id, &message, server_to_client);
+                        .add_websocket_message(id, &message, server_to_client)
+                        .await;
                     if let Err(err) = sink.send(message).await {
                         if !ignore_tungstenite_error(&err) {
                             self.state
                                 .add_websocket_error(id, format!("Websocket close error: {err}"))
+                                .await
                         }
                     }
                 }
                 Err(err) => {
                     if ignore_tungstenite_error(&err) {
-                        self.state.add_websocket_error(id, "Closed".to_string());
+                        self.state
+                            .add_websocket_error(id, "Closed".to_string())
+                            .await;
                     } else {
                         self.state
-                            .add_websocket_error(id, format!("Websocket message error: {err}"));
+                            .add_websocket_error(id, format!("Websocket message error: {err}"))
+                            .await;
                     }
                     if let Err(err) = sink.send(tungstenite::Message::Close(None)).await {
                         if !ignore_tungstenite_error(&err) {
                             self.state
                                 .add_websocket_error(id, format!("Websocket close error: {err}"))
+                                .await
                         }
                     };
 
@@ -574,7 +623,8 @@ impl Server {
     fn handle_connect(
         self: Arc<Self>,
         mut req: Request,
-        recorder: Recorder,
+        mut traffic: Traffic,
+        traffic_done_tx: TrafficDoneSender,
     ) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
         let authority = match req.uri().authority().cloned() {
@@ -584,8 +634,8 @@ impl Server {
                 return Ok(res);
             }
         };
+        let server = self.clone();
         let fut = async move {
-            let mut recorder = ErrorRecorder::new(recorder);
             match hyper::upgrade::on(&mut req).await {
                 Ok(upgraded) => {
                     let mut upgraded = TokioIo::new(upgraded);
@@ -594,7 +644,7 @@ impl Server {
                     let bytes_read = match upgraded.read_exact(&mut buffer).await {
                         Ok(bytes_read) => bytes_read,
                         Err(err) => {
-                            recorder.add_error(format!(
+                            traffic.add_error(format!(
                                 "Failed to read from upgraded connection: {err}"
                             ));
                             return;
@@ -608,16 +658,21 @@ impl Server {
 
                     if buffer == *b"GET " {
                         if let Err(err) = self
-                            .serve_connect_stream(upgraded, Scheme::HTTP, authority)
+                            .serve_connect_stream(
+                                upgraded,
+                                Scheme::HTTP,
+                                authority,
+                                traffic_done_tx,
+                            )
                             .await
                         {
-                            recorder.add_error(format!("Websocket connect error: {err}"));
+                            traffic.add_error(format!("Websocket connect error: {err}"));
                         }
                     } else if buffer[..2] == *b"\x16\x03" {
                         let server_config = match self.ca.gen_server_config(&authority).await {
                             Ok(server_config) => server_config,
                             Err(err) => {
-                                recorder.add_error(format!("Failed to build server config: {err}"));
+                                traffic.add_error(format!("Failed to build server config: {err}"));
                                 return;
                             }
                         };
@@ -625,7 +680,7 @@ impl Server {
                         let stream = match TlsAcceptor::from(server_config).accept(upgraded).await {
                             Ok(stream) => stream,
                             Err(err) => {
-                                recorder.add_error(format!(
+                                traffic.add_error(format!(
                                     "Failed to establish TLS Connection: {err}"
                                 ));
                                 return;
@@ -633,18 +688,18 @@ impl Server {
                         };
 
                         if let Err(err) = self
-                            .serve_connect_stream(stream, Scheme::HTTPS, authority)
+                            .serve_connect_stream(stream, Scheme::HTTPS, authority, traffic_done_tx)
                             .await
                         {
                             if !err
                                 .to_string()
                                 .starts_with("error shutting down connection")
                             {
-                                recorder.add_error(format!("HTTPS connect error: {err}"));
+                                traffic.add_error(format!("HTTPS connect error: {err}"));
                             }
                         }
                     } else {
-                        recorder.add_error(format!(
+                        traffic.add_error(format!(
                             "Unknown protocol, read '{:02X?}' from upgraded connection",
                             &buffer[..bytes_read]
                         ));
@@ -652,7 +707,7 @@ impl Server {
                         let mut server = match TcpStream::connect(authority.as_str()).await {
                             Ok(server) => server,
                             Err(err) => {
-                                recorder
+                                traffic
                                     .add_error(format! {"Failed to connect to {authority}: {err}"});
                                 return;
                             }
@@ -661,7 +716,7 @@ impl Server {
                         if let Err(err) =
                             tokio::io::copy_bidirectional(&mut upgraded, &mut server).await
                         {
-                            recorder.add_error(format!(
+                            traffic.add_error(format!(
                                 "Failed to tunnel unknown protocol to {}: {}",
                                 authority, err
                             ));
@@ -669,9 +724,10 @@ impl Server {
                     }
                 }
                 Err(err) => {
-                    recorder.add_error(format!("Upgrade error: {err}"));
+                    traffic.add_error(format!("Upgrade error: {err}"));
                 }
             };
+            server.state.add_traffic(traffic).await;
         };
 
         tokio::spawn(fut);
@@ -683,6 +739,7 @@ impl Server {
         stream: I,
         scheme: Scheme,
         authority: Authority,
+        traffic_done_tx: TrafficDoneSender,
     ) -> Result<(), Box<dyn std::error::Error + Sync + Send>>
     where
         I: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -702,7 +759,7 @@ impl Server {
                 req = Request::from_parts(parts, body);
             };
 
-            self.clone().handle(req)
+            self.clone().handle(req, traffic_done_tx.clone())
         });
 
         hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
@@ -710,12 +767,17 @@ impl Server {
             .await
     }
 
-    async fn process_proxy_res<T: Body<Error = E>, E: std::error::Error>(
+    async fn process_proxy_res<T: Body<Data = Bytes> + Send + Sync + 'static>(
         &self,
         proxy_res: hyper::Response<T>,
-        mut recorder: Recorder,
-        instant: Instant,
+        mut traffic: Traffic,
+        traffic_done_tx: TrafficDoneSender,
     ) -> Result<Response, hyper::Error> {
+        let proxy_res = {
+            let (parts, body) = proxy_res.into_parts();
+            Response::from_parts(parts, body.map_err(|_| anyhow!("Invalid response")).boxed())
+        };
+
         let proxy_res_version = proxy_res.version();
         let proxy_res_status = proxy_res.status();
         let proxy_res_headers = proxy_res.headers().clone();
@@ -725,72 +787,83 @@ impl Server {
             .and_then(|v| v.to_str().ok())
             .unwrap_or_default();
 
-        recorder.check_match(is_match_type(&self.mime_filters, content_type));
-
-        let proxy_res_body = match proxy_res.collect().await {
-            Ok(v) => v.to_bytes(),
-            Err(err) => {
-                return self.internal_server_error(err, recorder);
-            }
-        };
-        recorder.set_time(instant.elapsed());
-
-        let proxy_res_body_size = proxy_res_body.len();
+        traffic.check_match(is_match_type(&self.mime_filters, content_type));
 
         let mut res = Response::default();
-        let mut encoding = "";
+
         for (key, value) in proxy_res_headers.iter() {
-            if key == CONTENT_ENCODING {
-                if let Ok(value) = value.to_str() {
-                    encoding = value;
-                }
-            }
             res.headers_mut().insert(key.clone(), value.clone());
         }
 
-        recorder
+        traffic
             .set_res_status(proxy_res_status)
             .set_res_version(&proxy_res_version)
             .set_res_headers(&proxy_res_headers);
 
-        if recorder.is_valid() {
-            if proxy_res_body_size > 0 {
-                let body = decompress(&proxy_res_body, encoding)
-                    .await
-                    .unwrap_or_else(|| proxy_res_body.to_vec());
-                recorder.set_res_body(&body, proxy_res_body_size);
-            } else {
-                recorder.set_res_body(&proxy_res_body, proxy_res_body_size);
-            }
-        }
-
         *res.status_mut() = proxy_res_status;
-        *res.body_mut() = Full::new(proxy_res_body)
-            .map_err(|err| anyhow!("{err}"))
-            .boxed();
 
-        self.take_recorder(recorder);
+        let res_body_file = if traffic.valid {
+            match self.res_body_file(&mut traffic) {
+                Ok(v) => Some(v),
+                Err(err) => {
+                    return self.internal_server_error(err, traffic).await;
+                }
+            }
+        } else {
+            None
+        };
+
+        let res_body = BodyWrapper::new(
+            proxy_res.into_body(),
+            res_body_file,
+            Some((traffic.id, traffic_done_tx)),
+        );
+
+        *res.body_mut() = BoxBody::new(res_body);
+
+        self.state.add_traffic(traffic).await;
 
         Ok(res)
     }
 
-    fn take_recorder(&self, recorder: Recorder) {
-        if recorder.is_valid() {
-            recorder.print();
-            self.state.add_traffic(recorder.take_traffic())
-        }
-    }
-
-    fn internal_server_error<T: std::fmt::Display>(
+    async fn internal_server_error<T: std::fmt::Display>(
         &self,
         error: T,
-        mut recorder: Recorder,
+        mut traffic: Traffic,
     ) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
-        recorder.add_error(error.to_string());
-        self.take_recorder(recorder);
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+
+        let traffic_id = traffic.id;
+        traffic.add_error(error.to_string());
+        self.state.add_traffic(traffic).await;
+        self.state.done_traffic(traffic_id).await;
+
         Ok(res)
+    }
+
+    fn req_body_file(&self, traffic: &mut Traffic) -> Result<File> {
+        let path = self.temp_dir.join(format!("{}-req", traffic.id));
+        let file = File::create(&path).with_context(|| {
+            format!(
+                "Failed to create file '{}' to store request body",
+                path.display()
+            )
+        })?;
+        traffic.set_req_body_file(&path);
+        Ok(file)
+    }
+
+    fn res_body_file(&self, traffic: &mut Traffic) -> Result<File> {
+        let path = self.temp_dir.join(format!("{}-res", traffic.id));
+        let file = File::create(&path).with_context(|| {
+            format!(
+                "Failed to create file '{}' to store response body",
+                path.display()
+            )
+        })?;
+        traffic.set_res_body_file(&path);
+        Ok(file)
     }
 }
 
@@ -802,8 +875,67 @@ pub enum PrintMode {
     Markdown,
 }
 
-fn set_res_body(res: &mut Response, body: String) {
-    let body = Bytes::from(body);
+pin_project! {
+    pub struct BodyWrapper<B> {
+        #[pin]
+        inner: B,
+        file: Option<File>,
+        traffic_done: Option<(usize, TrafficDoneSender)>,
+    }
+    impl<B> PinnedDrop for BodyWrapper<B> {
+        fn drop(this: Pin<&mut Self>) {
+            if let Some((id, traffic_done_tx)) = this.traffic_done.as_ref() {
+                let _ = traffic_done_tx.send(*id);
+            }
+        }
+     }
+}
+
+impl<B> BodyWrapper<B> {
+    pub fn new(
+        inner: B,
+        file: Option<File>,
+        traffic_done: Option<(usize, TrafficDoneSender)>,
+    ) -> Self {
+        Self {
+            inner,
+            file,
+            traffic_done,
+        }
+    }
+}
+
+impl<B> Body for BodyWrapper<B>
+where
+    B: Body<Data = Bytes> + Send + Sync + 'static,
+{
+    type Data = B::Data;
+    type Error = B::Error;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<hyper::body::Frame<Self::Data>, Self::Error>>> {
+        let mut this = self.project();
+        match Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
+                Ok(data) => {
+                    if let Some(file) = this.file.as_mut() {
+                        let _ = file.write_all(&data);
+                    }
+                    Poll::Ready(Some(Ok(Frame::data(data))))
+                }
+                Err(e) => Poll::Ready(Some(Ok(e))),
+            },
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(e))),
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+fn set_res_body<T: std::fmt::Display>(res: &mut Response, body: T) {
+    let body = Bytes::from(body.to_string());
     if let Ok(header_value) = HeaderValue::from_str(&body.len().to_string()) {
         res.headers_mut().insert(CONTENT_LENGTH, header_value);
     }
@@ -843,27 +975,3 @@ fn ignore_tungstenite_error(err: &tungstenite::Error) -> bool {
             )
     )
 }
-
-async fn decompress(data: &Bytes, encoding: &str) -> Option<Vec<u8>> {
-    match encoding {
-        "deflate" => decompress_deflate(data).await.ok(),
-        "gzip" => decompress_gzip(data).await.ok(),
-        "br" => decompress_br(data).await.ok(),
-        _ => None,
-    }
-}
-
-macro_rules! decompress_fn {
-    ($fn_name:ident, $decoder:ident) => {
-        async fn $fn_name(in_data: &[u8]) -> Result<Vec<u8>> {
-            let mut decoder = $decoder::new(Vec::new());
-            decoder.write_all(in_data).await?;
-            decoder.shutdown().await?;
-            Ok(decoder.into_inner())
-        }
-    };
-}
-
-decompress_fn!(decompress_deflate, DeflateDecoder);
-decompress_fn!(decompress_gzip, GzipDecoder);
-decompress_fn!(decompress_br, BrotliDecoder);

@@ -4,12 +4,12 @@ expression: output
 ---
 [
   {
-    "id": 1,
+    "id":<ID>,
     "method": "POST",
     "uri": "http://localhost:<PORT>/echo",
     "status": 200,
     "size": 2,
-    "time": <TIME>,
+    "time":<TIME>,
     "mime": "application/json"
   }
 ]
