@@ -22,7 +22,8 @@ use proxyfor::{
     cert::CertificateAuthority,
     server::{PrintMode, Server, ServerBuilder},
 };
-use std::{net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use tokio::time::timeout;
 use tokio::{net::TcpListener, sync::oneshot};
 use tokio_graceful::Shutdown;
 use tokio_tungstenite::tungstenite::Message;
@@ -187,17 +188,18 @@ pub fn build_ca() -> Result<CertificateAuthority> {
     Ok(ca)
 }
 
-pub async fn fetch_subscribe(url: &str, mut count: usize) -> Result<String> {
+pub async fn fetch_subscribe(url: &str, timeout: Duration) -> Result<String> {
     let client = build_client()?;
     let res = client.get(url).send().await.unwrap();
     let mut chunks = BytesMut::new();
     let mut stream = res.bytes_stream();
-    while let Some(chunk) = stream.next().await {
-        chunks.extend_from_slice(&chunk?);
-        count -= 1;
-        if count == 0 {
-            break;
-        }
+    tokio::select! {
+        _ = async {
+                while let Some(chunk) = stream.next().await {
+                    chunks.extend_from_slice(&chunk.unwrap());
+                }
+        } => {}
+        _ = tokio::time::sleep(timeout) => {}
     }
     let output = std::str::from_utf8(&chunks).unwrap();
     Ok(output.to_string())
@@ -216,11 +218,11 @@ pub fn mask_text(text: &str) -> String {
     let text = re.replace_all(text, "<DATETIME>");
     let re = fancy_regex::Regex::new(r#"localhost:\d+"#).unwrap();
     let text = re.replace_all(&text, "localhost:<PORT>");
-    let re = fancy_regex::Regex::new(r#""time": \d+,"#).unwrap();
-    let text = re.replace_all(&text, r#""time": <TIME>,"#);
-    let re = fancy_regex::Regex::new(r#""time":\d+,"#).unwrap();
+    let re = fancy_regex::Regex::new(r#""id": *\d+,"#).unwrap();
+    let text = re.replace_all(&text, r#""id":<ID>,"#);
+    let re = fancy_regex::Regex::new(r#""time": *\d+,"#).unwrap();
     let text = re.replace_all(&text, r#""time":<TIME>,"#);
-    let re = fancy_regex::Regex::new(r#""version": "\S+","#).unwrap();
-    let text = re.replace_all(&text, r#""version": "<VERSION>","#);
+    let re = fancy_regex::Regex::new(r#""version": *"\S+","#).unwrap();
+    let text = re.replace_all(&text, r#""version":"<VERSION>","#);
     text.to_string()
 }

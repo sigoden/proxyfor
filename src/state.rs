@@ -1,27 +1,31 @@
-use crate::traffic::{wrap_entries, Body, Traffic};
+use crate::{
+    server::PrintMode,
+    traffic::{wrap_entries, Body, Traffic, TrafficHead},
+};
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Value;
-use std::sync::Mutex;
 use time::OffsetDateTime;
-use tokio::sync::broadcast;
+use tokio::{sync::broadcast, sync::Mutex};
 use tokio_tungstenite::tungstenite;
 
 #[derive(Debug)]
 pub(crate) struct State {
+    print_mode: PrintMode,
     traffics: Mutex<IndexMap<usize, Traffic>>,
-    traffics_notifier: broadcast::Sender<Head>,
+    traffics_notifier: broadcast::Sender<TrafficHead>,
     websockets: Mutex<IndexMap<usize, Vec<WebsocketMessage>>>,
     websockets_notifier: broadcast::Sender<(usize, WebsocketMessage)>,
 }
 
 impl State {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(print_mode: PrintMode) -> Self {
         let (traffics_notifier, _) = broadcast::channel(16);
         let (websockets_notifier, _) = broadcast::channel(64);
         Self {
+            print_mode,
             traffics: Default::default(),
             traffics_notifier,
             websockets: Default::default(),
@@ -29,82 +33,109 @@ impl State {
         }
     }
 
-    pub(crate) fn add_traffic(&self, traffic: Traffic) {
-        let Ok(mut traffics) = self.traffics.lock() else {
+    pub(crate) async fn add_traffic(&self, traffic: Traffic) {
+        if !traffic.valid {
             return;
-        };
-        let id = traffics.len() + 1;
-        let head = traffic.head(id);
-        traffics.insert(id, traffic);
+        }
+        let mut traffics = self.traffics.lock().await;
+        let head = traffic.head();
+        traffics.insert(traffic.id, traffic);
         let _ = self.traffics_notifier.send(head);
     }
 
-    pub(crate) fn get_traffic(&self, id: usize) -> Option<Traffic> {
-        let entries = self.traffics.lock().ok()?;
-        entries.get(&id).cloned()
+    pub(crate) async fn done_traffic(&self, traffic_id: usize) {
+        let mut traffics = self.traffics.lock().await;
+        let Some(traffic) = traffics.get_mut(&traffic_id) else {
+            return;
+        };
+        let head = traffic.done_record_time().await;
+        let _ = self.traffics_notifier.send(head);
+        match self.print_mode {
+            PrintMode::Nothing => {}
+            PrintMode::Oneline => {
+                println!("# {}", traffic.oneline());
+            }
+            PrintMode::Markdown => {
+                println!("{}", traffic.markdown(true).await);
+            }
+        }
     }
 
-    pub(crate) fn subscribe_traffics(&self) -> broadcast::Receiver<Head> {
+    pub(crate) async fn get_traffic(&self, id: usize) -> Option<Traffic> {
+        let traffics = self.traffics.lock().await;
+        traffics.get(&id).cloned()
+    }
+
+    pub(crate) fn subscribe_traffics(&self) -> broadcast::Receiver<TrafficHead> {
         self.traffics_notifier.subscribe()
     }
 
-    pub(crate) fn list_heads(&self) -> Vec<Head> {
-        let Ok(entries) = self.traffics.lock() else {
-            return vec![];
-        };
-        entries
-            .iter()
-            .map(|(id, traffic)| traffic.head(*id))
-            .collect()
+    pub(crate) async fn list_heads(&self) -> Vec<TrafficHead> {
+        let traffics = self.traffics.lock().await;
+        traffics.values().map(|v| v.head()).collect()
     }
 
-    pub(crate) fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
-        let entries = self.traffics.lock().map_err(|err| anyhow!("{err}"))?;
+    pub(crate) async fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
+        let traffics = self.traffics.lock().await;
+        let traffics: Vec<Traffic> = traffics.iter().map(|(_, v)| v.clone()).collect();
         match format {
             "markdown" => {
-                let output = entries
-                    .values()
-                    .map(|v| v.markdown(false))
-                    .collect::<Vec<String>>()
-                    .join("\n\n");
+                let output =
+                    futures_util::future::join_all(traffics.iter().map(|v| v.markdown(false)))
+                        .await
+                        .into_iter()
+                        .collect::<Vec<String>>()
+                        .join("\n\n");
                 Ok((output, "text/markdown; charset=UTF-8"))
             }
             "har" => {
-                let entries: Vec<Value> = entries.values().filter_map(|v| v.har_entry()).collect();
-                let json_output = wrap_entries(entries);
+                let values: Vec<Value> =
+                    futures_util::future::join_all(traffics.iter().map(|v| v.har_entry()))
+                        .await
+                        .into_iter()
+                        .flatten()
+                        .collect();
+                let json_output = wrap_entries(values);
                 let output = serde_json::to_string_pretty(&json_output)?;
                 Ok((output, "application/json; charset=UTF-8"))
             }
             "curl" => {
-                let output = entries
-                    .values()
-                    .map(|v| v.curl())
+                let output = futures_util::future::join_all(traffics.iter().map(|v| v.curl()))
+                    .await
+                    .into_iter()
                     .collect::<Vec<String>>()
                     .join("\n\n");
                 Ok((output, "text/plain; charset=UTF-8"))
             }
             "mem" => {
-                let traffics: Vec<&Traffic> = entries.values().collect();
-                let output = serde_json::to_string_pretty(&traffics)?;
+                let values = futures_util::future::join_all(traffics.iter().map(|v| v.json()))
+                    .await
+                    .into_iter()
+                    .collect::<Vec<Value>>();
+                let output = serde_json::to_string_pretty(&values)?;
+                Ok((output, "application/json; charset=UTF-8"))
+            }
+            "" => {
+                let values = traffics
+                    .iter()
+                    .map(|v| v.head())
+                    .collect::<Vec<TrafficHead>>();
+                let output = serde_json::to_string_pretty(&values)?;
                 Ok((output, "application/json; charset=UTF-8"))
             }
             _ => bail!("Unsupported format: {}", format),
         }
     }
 
-    pub(crate) fn new_websocket(&self) -> Option<usize> {
-        let Ok(mut websockets) = self.websockets.lock() else {
-            return None;
-        };
+    pub(crate) async fn new_websocket(&self) -> usize {
+        let mut websockets = self.websockets.lock().await;
         let id = websockets.len() + 1;
         websockets.insert(id, vec![]);
-        Some(id)
+        id
     }
 
-    pub(crate) fn add_websocket_error(&self, id: usize, error: String) {
-        let Ok(mut websockets) = self.websockets.lock() else {
-            return;
-        };
+    pub(crate) async fn add_websocket_error(&self, id: usize, error: String) {
+        let mut websockets = self.websockets.lock().await;
         let Some(messages) = websockets.get_mut(&id) else {
             return;
         };
@@ -113,21 +144,19 @@ impl State {
         let _ = self.websockets_notifier.send((id, message));
     }
 
-    pub(crate) fn add_websocket_message(
+    pub(crate) async fn add_websocket_message(
         &self,
         id: usize,
         message: &tungstenite::Message,
         server_to_client: bool,
     ) {
-        let Ok(mut websockets) = self.websockets.lock() else {
-            return;
-        };
+        let mut websockets = self.websockets.lock().await;
         let Some(messages) = websockets.get_mut(&id) else {
             return;
         };
         let body = match message {
-            tungstenite::Message::Text(text) => Body::text(text),
-            tungstenite::Message::Binary(bin) => Body::bytes(bin),
+            tungstenite::Message::Text(text) => Body::text(text, text.len()),
+            tungstenite::Message::Binary(bin) => Body::bytes(bin, bin.len()),
             _ => return,
         };
         let message = WebsocketMessage::Data(WebsocketData {
@@ -139,8 +168,8 @@ impl State {
         let _ = self.websockets_notifier.send((id, message));
     }
 
-    pub(crate) fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
-        let websockets = self.websockets.lock().ok()?;
+    pub(crate) async fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
+        let websockets = self.websockets.lock().await;
         let messages = websockets.get(&id)?;
         Some((messages.to_vec(), self.websockets_notifier.subscribe()))
     }
@@ -150,17 +179,6 @@ pub(crate) type SubscribeWebSocket = (
     Vec<WebsocketMessage>,
     broadcast::Receiver<(usize, WebsocketMessage)>,
 );
-
-#[derive(Debug, Clone, Serialize)]
-pub(crate) struct Head {
-    pub(crate) id: usize,
-    pub(crate) method: String,
-    pub(crate) uri: String,
-    pub(crate) status: Option<u16>,
-    pub(crate) size: Option<usize>,
-    pub(crate) time: Option<usize>,
-    pub(crate) mime: Option<String>,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub(crate) enum WebsocketMessage {

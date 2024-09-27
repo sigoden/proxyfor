@@ -332,10 +332,10 @@
          * @property {string} uri
          * @property {string} method
          * @property {?string} req_version
-         * @property {?Header[]} req_headers
+         * @property {?HeadersData} req_headers
          * @property {?BodyData} req_body
          * @property {?number} status
-         * @property {?Header[]} res_headers
+         * @property {?HeadersData} res_headers
          * @property {?string} res_version
          * @property {?BodyData} res_body
          * @property {?number} websocket_id
@@ -351,6 +351,12 @@
          * @property {?number} size
          * @property {?number} time
          * @property {?string} mime
+         */
+
+        /**
+         * @typedef {Object} HeadersData
+         * @property {Header[]} items
+         * @property {number} size
          */
 
         /**
@@ -515,7 +521,7 @@
                         let lines = buf.split("\n");
                         for (let i = 0; i < lines.length - 1; i++) {
                             const traffic = JSON.parse(lines[i]);
-                            handleNewTraffic(traffic);
+                            handleTraffic(traffic);
                         }
                         buf = lines[lines.length - 1];
                         return reader.read().then(handleNdjson);
@@ -528,7 +534,7 @@
             $trafficTableBody.addEventListener("click", (e) => {
                 const $tr = e.target.closest("tr");
                 if ($tr) {
-                    const id = $tr.getAttribute("data-traffic-id");
+                    const id = parseInt($tr.getAttribute("data-traffic-id"));
                     if (id) handleSelectTraffic(id);
                 }
             });
@@ -580,16 +586,7 @@
             const $newSelected = $trafficTableBody.querySelector(`tr[data-traffic-id="${id}"]`);
             if ($newSelected) {
                 $newSelected.classList.add("selected");
-                fetch(getTrafficEndpoint(id))
-                    .then(res => res.json())
-                    .then(data => {
-                        currentTraffic = data;
-                    })
-                    .catch(err => {
-                        currentTraffic = null;
-                        console.error(`Failed to fetch traffic ${id}`, err);
-                    })
-                    .finally(updateTabContent);
+                syncTraffic(id)
             }
         }
 
@@ -607,11 +604,28 @@
         }
 
         /**
-         * @param {TrafficHead} trafficHead
+         * @param {TrafficHead} head
          */
-        function handleNewTraffic(trafficHead) {
-            const row = tmplTrafficTableRow(trafficHead);
-            $trafficTableBody.insertAdjacentHTML("beforeend", row);
+        function handleTraffic(head) {
+            const $node = $trafficTableBody.querySelector(`[data-traffic-id="${head.id}"]`);
+            if ($node) {
+                $node.querySelector(".col-size").textContent = formatSize(head.size);
+                $node.querySelector(".col-time").textContent = formatTimeDelta(head.time);
+                if (selectedTrafficId === head.id) {
+                    syncTraffic(selectedTrafficId);
+                }
+            } else {
+                const row = `
+            <tr data-traffic-id="${head.id}">
+                <td class="col-uri">${head.uri}</td>
+                <td class="col-method">${head.method}</td>
+                <td class="col-status">${head.status || ""}</td>
+                <td class="col-type">${resolveResourceType(head)}</td>
+                <td class="col-size">${formatSize(head.size)}</td>
+                <td class="col-time">${formatTimeDelta(head.time)}</td>
+            </tr>`;
+                $trafficTableBody.insertAdjacentHTML("beforeend", row);
+            }
         }
 
         /**
@@ -680,6 +694,19 @@
                     })
 
             }
+        }
+
+        function syncTraffic(id) {
+            fetch(getTrafficEndpoint(id))
+                .then(res => res.json())
+                .then(data => {
+                    currentTraffic = data;
+                })
+                .catch(err => {
+                    currentTraffic = null;
+                    console.error(`Failed to fetch traffic ${id}`, err);
+                })
+                .finally(updateTabContent);
         }
 
         function updateTabContent() {
@@ -778,21 +805,6 @@
         }
 
         /**
-         * @param {TrafficHead} trafficHead
-         */
-        function tmplTrafficTableRow(trafficHead) {
-            return `
-            <tr data-traffic-id="${trafficHead.id}">
-                <td class="col-uri">${trafficHead.uri}</td>
-                <td class="col-method">${trafficHead.method}</td>
-                <td class="col-status">${trafficHead.status || ""}</td>
-                <td class="col-type">${resolveResourceType(trafficHead)}</td>
-                <td class="col-size">${formatSize(trafficHead.size)}</td>
-                <td class="col-time">${formatTimeDelta(trafficHead.time)}</td>
-            </tr>`;
-        }
-
-        /**
          * @param {Traffic} traffic
          */
         function tmplTrafficReq(traffic) {
@@ -815,17 +827,17 @@
         }
 
         /**
-         * @param {?Header[]} headers
+         * @param {?HeadersData} headers
          */
         function tmplHeaders(headers) {
-            return (headers || []).map(({ name, value }) =>
+            return (headers?.items || []).map(({ name, value }) =>
                 `<div class="header-line"><span class="header-key">${name}</span>:&nbsp;<span class="header-value">${value}</span></div>`
             ).join("");
         }
 
         /**
          * @param {BodyData} body
-         * @param {?Header[]} headers
+         * @param {?HeadersData} headers
          */
         function tmplBody(body, headers) {
             if (!body) return "";
@@ -890,17 +902,17 @@
         }
 
         /**
-         * @param {?Header[]} headers
+         * @param {?HeadersData} headers
          */
         function getContentType(headers) {
             return getHeader(headers, "content-type").split(';')[0].trim();
         }
 
         /**
-         * @param {?Header[]} headers
+         * @param {?HeadersData} headers
          */
         function getHeader(headers, type) {
-            return (headers || []).find(({ name }) => name.toLowerCase() === type)?.value || "";
+            return (headers?.items || []).find(({ name }) => name.toLowerCase() === type)?.value || "";
         }
 
         /**
@@ -931,6 +943,9 @@
                 }
                 if (trafficHead.mime.indexOf("html") >= 0) {
                     return "HTML"
+                }
+                if (trafficHead.mime.indexOf("text/event-stream") >= 0) {
+                    return "SSE"
                 }
             } else if (trafficHead.status) {
                 if (trafficHead.status == 101) {

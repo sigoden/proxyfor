@@ -5,60 +5,66 @@ expression: output
 /traffic/:id
 
 {
+  "id":<ID>,
   "uri": "http://localhost:<PORT>/echo",
   "method": "POST",
   "start": "<DATETIME>",
-  "time": <TIME>,
+  "time":<TIME>,
   "req_version": "HTTP/1.1",
-  "req_headers": [
-    {
-      "name": "content-type",
-      "value": "text/plain"
-    },
-    {
-      "name": "accept",
-      "value": "*/*"
-    },
-    {
-      "name": "host",
-      "value": "localhost:<PORT>"
-    },
-    {
-      "name": "content-length",
-      "value": "13"
-    }
-  ],
-  "req_headers_size": 121,
-  "req_body": {
-    "encode": "utf8",
-    "value": "Hello, World!"
+  "req_headers": {
+    "items": [
+      {
+        "name": "content-type",
+        "value": "text/plain"
+      },
+      {
+        "name": "accept",
+        "value": "*/*"
+      },
+      {
+        "name": "host",
+        "value": "localhost:<PORT>"
+      },
+      {
+        "name": "content-length",
+        "value": "13"
+      }
+    ],
+    "size": 121
   },
-  "req_body_size": 13,
   "status": 200,
   "res_version": "HTTP/1.1",
-  "res_headers": [
-    {
-      "name": "content-type",
-      "value": "text/plain"
-    },
-    {
-      "name": "content-length",
-      "value": "13"
-    },
-    {
-      "name": "date",
-      "value": "<DATETIME>"
-    }
-  ],
-  "res_headers_size": 114,
+  "res_headers": {
+    "items": [
+      {
+        "name": "content-type",
+        "value": "text/plain"
+      },
+      {
+        "name": "content-length",
+        "value": "13"
+      },
+      {
+        "name": "date",
+        "value": "<DATETIME>"
+      }
+    ],
+    "size": 114
+  },
+  "websocket_id": null,
+  "error": null,
+  "req_body": {
+    "encode": "utf8",
+    "value": "Hello, World!",
+    "raw_size": 13,
+    "size": 13
+  },
   "res_body": {
     "encode": "utf8",
-    "value": "Hello, World!"
-  },
-  "res_body_size": 13,
-  "res_body_decompress_size": 13,
-  "websocket_id": null,
-  "error": null
+    "value": "Hello, World!",
+    "raw_size": 13,
+    "size": 13
+  }
 }
 
 /traffic/:id?markdown
@@ -95,17 +101,17 @@ Hello, World!
 
 {
   "log": {
-    "version": "<VERSION>",
+    "version":"<VERSION>",
     "creator": {
       "name": "proxyfor",
-      "version": "<VERSION>",
+      "version":"<VERSION>",
       "comment": ""
     },
     "pages": [],
     "entries": [
       {
         "startedDateTime": "<DATETIME>",
-        "time": <TIME>,
+        "time":<TIME>,
         "request": {
           "method": "POST",
           "url": "http://localhost:<PORT>/echo",

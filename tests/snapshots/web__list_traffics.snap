@@ -6,30 +6,30 @@ expression: output
 
 [
   {
-    "id": 1,
+    "id":<ID>,
     "method": "GET",
     "uri": "http://localhost:<PORT>/hello",
     "status": 200,
     "size": 13,
-    "time": <TIME>,
+    "time":<TIME>,
     "mime": null
   },
   {
-    "id": 2,
+    "id":<ID>,
     "method": "GET",
     "uri": "http://localhost:<PORT>/hello/gzip",
     "status": 200,
     "size": 33,
-    "time": <TIME>,
+    "time":<TIME>,
     "mime": null
   },
   {
-    "id": 3,
+    "id":<ID>,
     "method": "POST",
     "uri": "http://localhost:<PORT>/echo",
     "status": 200,
     "size": 13,
-    "time": <TIME>,
+    "time":<TIME>,
     "mime": "text/plain"
   }
 ]
@@ -109,17 +109,17 @@ Hello, World!
 
 {
   "log": {
-    "version": "<VERSION>",
+    "version":"<VERSION>",
     "creator": {
       "name": "proxyfor",
-      "version": "<VERSION>",
+      "version":"<VERSION>",
       "comment": ""
     },
     "pages": [],
     "entries": [
       {
         "startedDateTime": "<DATETIME>",
-        "time": <TIME>,
+        "time":<TIME>,
         "request": {
           "method": "GET",
           "url": "http://localhost:<PORT>/hello",
@@ -179,7 +179,7 @@ Hello, World!
       },
       {
         "startedDateTime": "<DATETIME>",
-        "time": <TIME>,
+        "time":<TIME>,
         "request": {
           "method": "GET",
           "url": "http://localhost:<PORT>/hello/gzip",
@@ -243,7 +243,7 @@ Hello, World!
       },
       {
         "startedDateTime": "<DATETIME>",
-        "time": <TIME>,
+        "time":<TIME>,
         "request": {
           "method": "POST",
           "url": "http://localhost:<PORT>/echo",

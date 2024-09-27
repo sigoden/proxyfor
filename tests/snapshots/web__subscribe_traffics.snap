@@ -2,5 +2,5 @@
 source: tests/web.rs
 expression: output
 ---
-{"id":1,"method":"POST","uri":"http://localhost:<PORT>/echo","status":200,"size":13,"time":<TIME>,"mime":"text/plain"}
-{"id":2,"method":"POST","uri":"http://localhost:<PORT>/echo","status":200,"size":13,"time":<TIME>,"mime":"text/plain"}
+{"id":<ID>,"method":"POST","uri":"http://localhost:<PORT>/echo","status":200,"size":13,"time":<TIME>,"mime":"text/plain"}
+{"id":<ID>,"method":"POST","uri":"http://localhost:<PORT>/echo","status":200,"size":13,"time":<TIME>,"mime":"text/plain"}

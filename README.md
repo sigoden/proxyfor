@@ -8,12 +8,12 @@ A lightweight proxy for capturing HTTP(S) and WS(S) traffic.
 
 ## Features
 
-- Support forward proxy
-- Support reverse proxy
+- Support forward/reverse proxy
 - Support filtering
 - Support HTTP/HTTPS/WS/WSS protocols
 - Integrate web interface
 - Integrate certificates installation webapp
+- Capture req/res bodies in a non-blocking, streaming manner
 - Export in Markdown, cURL, or HAR formats
 
 ## Installation
