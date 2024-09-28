@@ -125,6 +125,19 @@
             background-color: #f5f5f5;
         }
 
+        .certificate {
+            position: relative;
+            display: inline-block;
+            border: none;
+            cursor: pointer;
+            padding-right: 0.5rem;
+        }
+
+        .certificate a {
+            color: #333;
+            text-decoration: none;
+        }
+
         .traffic-table {
             width: 100%;
             table-layout: fixed;
@@ -320,6 +333,9 @@
                         <a data-kind="har">Copy as HAR</a>
                         <a data-kind="res-body">Copy Response Body</a>
                     </div>
+                </div>
+                <div class="certificate">
+                    <a href="/__proxyfor__/certificate/" target="_blank" title="Install CA certificate for HTTPS Proxy">Certificate</a>
                 </div>
             </div>
         </div>

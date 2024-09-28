@@ -232,6 +232,8 @@ impl Server {
             } else if let Some(id) = path.strip_prefix("/traffic/") {
                 let query = req.uri().query().unwrap_or_default();
                 self.handle_get_traffic(&mut res, id, query).await
+            } else if let Some(path) = path.strip_prefix("/certificate/") {
+                self.handle_cert_index(&mut res, path).await
             } else {
                 *res.status_mut() = StatusCode::NOT_FOUND;
                 return Ok(res);
