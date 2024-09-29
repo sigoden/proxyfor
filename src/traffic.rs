@@ -306,12 +306,12 @@ impl Traffic {
         self.head()
     }
 
-    async fn read_req_body(&self) -> Option<Body> {
+    pub async fn read_req_body(&self) -> Option<Body> {
         let path = self.req_body_file.as_ref()?;
         Body::read(path, "").await.ok()
     }
 
-    async fn read_res_body(&self) -> Option<Body> {
+    pub async fn read_res_body(&self) -> Option<Body> {
         let path = self.res_body_file.as_ref()?;
         let encoding = get_header_value(&self.res_headers, "content-encoding").unwrap_or_default();
         Body::read(path, encoding).await.ok()
@@ -331,8 +331,8 @@ pub struct TrafficHead {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Headers {
-    items: Vec<Header>,
-    size: usize,
+    pub items: Vec<Header>,
+    pub size: usize,
 }
 
 impl Headers {

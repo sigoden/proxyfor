@@ -44,6 +44,11 @@ tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring
 tokio-stream = { version = "0.1.14", default-features = false, features = ["sync"] }
 tokio-tungstenite = { version = "0.23.1", features = ["rustls", "rustls-tls-webpki-roots"] }
 url = "2.5.0"
+crossterm = "0.28.1"
+ratatui = { version = "0.28.1", features = ["unstable-rendered-line-info"] }
+unicode-width = "0.2.0"
+log = "0.4.22"
+simplelog = "0.12.2"
 
 [dev-dependencies]
 async-http-proxy = { version = "1.2.5", features = ["runtime-tokio"] }

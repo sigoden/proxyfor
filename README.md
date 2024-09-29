@@ -11,10 +11,23 @@ A lightweight proxy for capturing HTTP(S) and WS(S) traffic.
 - Support forward/reverse proxy
 - Support filtering
 - Support HTTP/HTTPS/WS/WSS protocols
-- Integrate web interface
+- Integrate terminal user interface (TUI)
+- Integrate web user interface (WebUI)
 - Integrate certificates installation webapp
 - Capture req/res bodies in a non-blocking, streaming manner
 - Export in Markdown, cURL, or HAR formats
+- Written in Rust, offering a single executable with no external dependencies
+
+## Screenshots
+
+**Terminal User Inferace**
+![proxyfor-tui](https://github.com/user-attachments/assets/01db8ada-0b0c-4ddc-bc3f-045cfdb67d64)
+
+**Web User Inferace**
+![proxyfor-webui](https://github.com/user-attachments/assets/b13ffe34-69e5-4513-b904-243c391528b2)
+
+**Dump all traffics**
+![proxyfor-dump](https://github.com/user-attachments/assets/eca3b38c-c2e9-404e-8990-e34feee7ae3c)
 
 ## Installation
 
@@ -34,7 +47,7 @@ docker run -v ~/.proxyfor:/.proxyfor -p 8080:8080 --rm sigoden/proxyfor --web
 
 Download from [Github Releases](https://github.com/sigoden/proxyfor/releases), unzip and add proxyfor to your $PATH.
 
-## Usage
+## Proxy Type
 
 ### Forward Proxy
 
@@ -44,8 +57,6 @@ The client sets the proxy to `http://127.0.0.1:8080`.
 $ proxyfor
 $ curl -x http://127.0.0.1:8080 httpbin.org/ip
 ```
-
-![forwarding-proxy](https://github.com/sigoden/proxyfor/assets/4012553/c40cc1be-b9e9-4846-9702-ad3610719b08)
 
 ### Reverse Proxy
 
@@ -57,16 +68,6 @@ The client directly requests `http://127.0.0.1:8080`.
 $ proxyfor https://httpbin.org
 $ curl http://127.0.0.1:8080/ip
 ```
-
-## Web Interface
-
-Proxyfor provides a web-based user interface that allows you to interactively inspect the HTTP traffic. All traffic is kept in memory, which means that it’s intended for small-ish samples.
-
-```sh
-$ proxyfor --web
-```
-
-![proxyfor-webui](https://github.com/sigoden/proxyfor/assets/4012553/fef38f0c-ff7d-4b90-a9f0-a8c10c44c38c)
 
 ## Command Line
 
@@ -80,12 +81,29 @@ Options:
   -l, --listen <ADDR>         Listening ip and port address [default: 0.0.0.0:8080]
   -f, --filters <REGEX>       Only inspect http(s) traffic whose `{method} {uri}` matches the regex
   -m, --mime-filters <VALUE>  Only inspect http(s) traffic whose content-type matches the value
-  -w, --web                   Enable web interface
+  -W, --web                   Enable user-friendly web interface
+  -T, --tui                   Eenter TUI
+  -D, --dump                  Dump all traffics
   -h, --help                  Print help
   -V, --version               Print version
 ```
 
-Change the ip and port.
+### Choosing User Interface
+
+You can select different interfaces with the following commands:
+
+```sh
+proxyfor                   # Enter TUI
+proxyfor --web             # Serve WebUI
+proxyfor --dump            # Dump all traffics
+proxyfor --web --tui       # Serve WebUI + Enter TUI
+proxyfor --web --dump      # Serve WebUI + Dump all traffics
+proxyfor > proxyfor.md     # Dump all traffics to markdown file
+```
+
+###  Changing IP and Port
+
+You can specify different listening addresses:
 
 ```sh
 proxyfor -l 18080
@@ -93,33 +111,24 @@ proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:18080
 ```
 
-Enable web interface with `-w/--web`
+### Filtering Traffic
 
-```sh
-proxyfor --web
-```
-
-Use `-f/--filters` to filter traffic by matching `{method} {uri}`.
+Filter traffic by setting method and URI:
 
 ```sh
 proxyfor -f httpbin.org/ip -f httpbin.org/anything
 proxyfor -f '/^(get|post) https:\/\/httpbin.org/'       
 ```
 
-Use `-m/--mime-filters` to filter traffic by content-type.
+Filter traffic based on content type:
 
 ```sh
 proxyfor -m application/json -m application/ld+json
 proxyfor -m text/
 ```
 
-Pipe it to a markdown file, then view the captured traffic using your favorite editor/IDE with syntax highlighting, folding, search capabilities.
 
-```sh
-proxyfor > proxyfor.md
-```
-
-## Certificates
+## CA Certificates
 
 Proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts proxyfor’s built-in certificate authority. Usually this means that the proxyfor CA certificate has to be installed on the client device.
 

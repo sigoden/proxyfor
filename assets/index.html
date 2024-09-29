@@ -190,7 +190,6 @@
 
         tbody .col-type {
             font-size: 8px;
-            text-align: center;
         }
 
         .col-size {
@@ -317,6 +316,16 @@
             <div data-tab="ws" class="tab hidden">Websocket</div>
             <div data-tab="err" class="tab hidden">Error</div>
             <div class="toolbox">
+                <div class="dropdown copy-dropdown">
+                    <button class="dropbtn">Copy▾</button>
+                    <div class="dropdown-content">
+                        <a data-kind="markdown">Copy as Markdown</a>
+                        <a data-kind="curl">Copy as cURL</a>
+                        <a data-kind="har">Copy as HAR</a>
+                        <a data-kind="req-body">Copy Request Body</a>
+                        <a data-kind="res-body">Copy Response Body</a>
+                    </div>
+                </div>
                 <div class="dropdown export-dropdown">
                     <button class="dropbtn">Export▾</button>
                     <div class="dropdown-content">
@@ -325,17 +334,9 @@
                         <a data-kind="har">Export all as HAR</a>
                     </div>
                 </div>
-                <div class="dropdown copy-dropdown">
-                    <button class="dropbtn">Copy▾</button>
-                    <div class="dropdown-content">
-                        <a data-kind="markdown">Copy as Markdown</a>
-                        <a data-kind="curl">Copy as cURL</a>
-                        <a data-kind="har">Copy as HAR</a>
-                        <a data-kind="res-body">Copy Response Body</a>
-                    </div>
-                </div>
                 <div class="certificate">
-                    <a href="/__proxyfor__/certificate/" target="_blank" title="Install CA certificate for HTTPS Proxy">Certificate</a>
+                    <a href="/__proxyfor__/certificate/" target="_blank"
+                        title="Install CA certificate for HTTPS Proxy">Certificate</a>
                 </div>
             </div>
         </div>
@@ -392,7 +393,7 @@
          */
 
         /**
-         * @typedef {"markdown"|"curl"|"har"|"res-body"} CopyKind
+         * @typedef {"markdown"|"curl"|"har"|"req-body"|"res-body"} CopyKind
          */
 
         /**
@@ -686,19 +687,10 @@
             if (!currentTraffic) {
                 return;
             }
-            if (kind == "res-body") {
-                if (currentTraffic.res_body) {
-                    let text = "";
-                    if (currentTraffic.res_body.encode == "base64") {
-                        let contentType = getContentType(currentTraffic.res_headers);
-                        text = `data:${contentType};base64,${currentTraffic.res_body.value}`;
-                    } else {
-                        text = currentTraffic.res_body.value;
-                    }
-                    if (text) {
-                        ClipboardJS.copy(text);
-                    }
-                }
+            if (kind == "req-body") {
+                copyBody(currentTraffic.req_body)
+            } else if (kind == "res-body") {
+                copyBody(currentTraffic.res_body)
             } else {
                 fetch(getTrafficEndpoint(selectedTrafficId) + `?${kind}`)
                     .then(res => res.text())
@@ -986,6 +978,23 @@
             return value.startsWith('x-') ? value.substring(2) : value;
         }
 
+        /**
+         * @param {BodyData} body
+         */
+        function copyBody(body) {
+            if (!body) return;
+            let text = "";
+            if (body.encode == "base64") {
+                let contentType = getContentType(headers);
+                text = `data:${contentType};base64,${body.value}`;
+            } else {
+                text = body.value;
+            }
+            if (text) {
+                ClipboardJS.copy(text);
+            }
+        }
+
         function base64ToBlob(base64String, contentType) {
             const byteCharacters = atob(base64String);
             const byteArrays = [];
@@ -1006,34 +1015,36 @@
 
         }
 
-        function formatSize(bytes) {
-            if (bytes === null) return "";
-            if (bytes === 0) return "0";
+        function formatSize(len) {
+            if (len === null) return "";
+            if (len === 0) return "0";
             const prefix = ["b", "kb", "mb", "gb", "tb"];
             let i = 0;
             for (; i < prefix.length; i++) {
-                if (Math.pow(1024, i + 1) > bytes) {
+                if (Math.pow(1024, i + 1) > len) {
                     break;
                 }
             }
             let precision;
-            if (bytes % Math.pow(1024, i) === 0) precision = 0;
+            if (len % Math.pow(1024, i) === 0) precision = 0;
             else precision = 1;
-            return (bytes / Math.pow(1024, i)).toFixed(precision) + prefix[i];
+            return (len / Math.pow(1024, i)).toFixed(precision) + prefix[i];
         }
 
-        function formatTimeDelta(milliseconds) {
-            let time = milliseconds;
-            if (time === null) return "";
-            if (time === 0) return "0";
+        function formatTimeDelta(delta) {
+            if (delta === null) return "";
+            if (delta === 0) return "0";
+            if (delta > 1000 && delta < 10000) {
+                return (delta / 1000.0).toFixed(2) + "s";
+            }
             const prefix = ["ms", "s", "min", "h"];
             const div = [1000, 60, 60];
             let i = 0;
-            while (Math.abs(time) >= div[i] && i < div.length) {
-                time = time / div[i];
+            while (Math.abs(delta) >= div[i] && i < div.length) {
+                delta = delta / div[i];
                 i++;
             }
-            return Math.round(time) + prefix[i];
+            return Math.round(delta) + prefix[i];
         }
 
         function formatDate(date) {
