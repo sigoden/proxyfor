@@ -165,6 +165,9 @@ impl App {
     fn handle_events(&mut self, timeout: Duration) -> Result<()> {
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != event::KeyEventKind::Press {
+                    return Ok(());
+                }
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if self.current_view == View::Details {
