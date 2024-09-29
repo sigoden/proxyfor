@@ -4,7 +4,7 @@ expression: output
 ---
 [
   {
-    "id":<ID>,
+    "id": 1,
     "method": "POST",
     "uri": "http://localhost:<PORT>/echo",
     "status": 200,

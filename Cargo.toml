@@ -12,7 +12,6 @@ keywords = ["proxy", "mitm", "https", "http"]
 
 [dependencies]
 anyhow = "1.0"
-async-compression = { version = "0.4.6", features = ["brotli", "gzip", "zstd", "deflate", "tokio"] }
 base64 = "0.22.0"
 bytes = "1.5"
 clap = { version = "4.5.1", features = ["derive"] }
@@ -29,7 +28,6 @@ hyper-tungstenite = "0.14.0"
 indexmap = { version = "2.2.5", features = ["serde"] }
 moka = { version = "0.12.5", features = ["future"] }
 pin-project-lite = "0.2.13"
-pretty-hex = "0.4.1"
 rand = "0.8.5"
 rcgen = { version = "0.13.0", default-features = false, features = ["x509-parser", "pem", "ring"] }
 rsa = "0.9.6"
@@ -49,8 +47,12 @@ ratatui = { version = "0.28.1", features = ["unstable-rendered-line-info"] }
 unicode-width = "0.2.0"
 log = "0.4.22"
 simplelog = "0.12.2"
+flate2 = "1.0.34"
+brotli = "6.0.0"
+zstd = "0.13.2"
 
 [dev-dependencies]
+async-compression = { version = "0.4.12", features = ["gzip", "tokio"] }
 async-http-proxy = { version = "1.2.5", features = ["runtime-tokio"] }
 insta = "1.36.1"
 pretty_assertions = "1.4.0"

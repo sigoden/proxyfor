@@ -218,8 +218,8 @@ pub fn mask_text(text: &str) -> String {
     let text = re.replace_all(text, "<DATETIME>");
     let re = fancy_regex::Regex::new(r#"localhost:\d+"#).unwrap();
     let text = re.replace_all(&text, "localhost:<PORT>");
-    let re = fancy_regex::Regex::new(r#""id": *\d+,"#).unwrap();
-    let text = re.replace_all(&text, r#""id":<ID>,"#);
+    let re = fancy_regex::Regex::new(r#""gid": *\d+,"#).unwrap();
+    let text = re.replace_all(&text, r#""gid":<GID>,"#);
     let re = fancy_regex::Regex::new(r#""time": *\d+,"#).unwrap();
     let text = re.replace_all(&text, r#""time":<TIME>,"#);
     let re = fancy_regex::Regex::new(r#""version": *"\S+","#).unwrap();
