@@ -1,5 +1,4 @@
 use anyhow::{bail, Result};
-use async_compression::tokio::write::{BrotliDecoder, DeflateDecoder, GzipDecoder, ZstdDecoder};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{HeaderMap, StatusCode, Version};
 use serde::{Deserialize, Serialize, Serializer};
@@ -10,14 +9,12 @@ use std::{
     time::Instant,
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use tokio::io::AsyncWriteExt;
 
-const HEX_VIEW_SIZE: usize = 320;
-static TRAFFIC_ID: AtomicUsize = AtomicUsize::new(1);
+static GLOBAL_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Traffic {
-    pub id: usize,
+    pub gid: usize,
     pub uri: String,
     pub method: String,
     #[serde(serialize_with = "serialize_datetime")]
@@ -27,15 +24,12 @@ pub struct Traffic {
     pub time: Option<usize>,
     pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
-    #[serde(skip)]
     pub req_body_file: Option<String>,
     pub status: Option<u16>,
     pub res_version: Option<String>,
     pub res_headers: Option<Headers>,
-    #[serde(skip)]
     pub res_body_file: Option<String>,
-    #[serde(skip)]
-    pub size: Option<usize>,
+    pub res_body_size: Option<u64>,
     pub websocket_id: Option<usize>,
     pub error: Option<String>,
     #[serde(skip)]
@@ -45,7 +39,7 @@ pub struct Traffic {
 impl Traffic {
     pub fn new(uri: &str, method: &str) -> Self {
         Self {
-            id: TRAFFIC_ID.fetch_add(1, atomic::Ordering::Relaxed),
+            gid: GLOBAL_ID.fetch_add(1, atomic::Ordering::Relaxed),
             uri: uri.to_string(),
             method: method.to_string(),
             start: OffsetDateTime::now_utc(),
@@ -58,7 +52,7 @@ impl Traffic {
             res_version: None,
             res_headers: None,
             res_body_file: None,
-            size: None,
+            res_body_size: None,
             websocket_id: None,
             error: None,
             valid: true,
@@ -85,9 +79,8 @@ impl Traffic {
         output
     }
 
-    pub async fn markdown(&self, print: bool) -> String {
-        let req_body = self.read_req_body().await;
-        let res_body = self.read_res_body().await;
+    pub async fn markdown(&self) -> String {
+        let (req_body, res_body) = self.bodies().await;
 
         let mut lines: Vec<String> = vec![];
 
@@ -97,25 +90,26 @@ impl Traffic {
             lines.push(render_header("REQUEST HEADERS", headers));
         }
 
-        if let Some(body) = req_body {
-            if !body.is_empty() {
-                lines.push(render_body("REQUEST BODY", &body, &self.req_headers, print));
-            }
+        if let (Some(body), Some(body_file)) = (req_body, &self.req_body_file) {
+            lines.push(render_body(
+                "REQUEST BODY",
+                &body,
+                body_file,
+                &self.req_headers,
+            ));
         }
 
         if let Some(headers) = &self.res_headers {
             lines.push(render_header("RESPONSE HEADERS", headers));
         }
 
-        if let Some(body) = res_body {
-            if !body.is_empty() {
-                lines.push(render_body(
-                    "RESPONSE BODY",
-                    &body,
-                    &self.res_headers,
-                    print,
-                ));
-            }
+        if let (Some(body), Some(body_file)) = (res_body, &self.res_body_file) {
+            lines.push(render_body(
+                "RESPONSE BODY",
+                &body,
+                body_file,
+                &self.res_headers,
+            ));
         }
 
         if let Some(error) = &self.error {
@@ -135,8 +129,7 @@ impl Traffic {
 
     pub async fn har_entry(&self) -> Option<Value> {
         self.status?;
-        let req_body = self.read_req_body().await;
-        let res_body = self.read_res_body().await;
+        let (req_body, res_body) = self.bodies().await;
         let request = json!({
             "method": self.method,
             "url": self.uri,
@@ -145,8 +138,8 @@ impl Traffic {
             "headers": har_headers(&self.req_headers),
             "queryString": har_query_string(&self.uri),
             "postData": har_req_body(&req_body, &self.req_headers),
-            "headersSize": har_size(&self.req_headers.as_ref().map(|v| v.size)),
-            "bodySize": har_size(&req_body.as_ref().map(|v| v.raw_size)),
+            "headersSize": har_size(self.req_headers.as_ref().map(|v| v.size), 0),
+            "bodySize": har_size(req_body.as_ref().map(|v| v.size), 0),
         });
         let response = json!({
             "status": self.status.unwrap_or_default(),
@@ -154,10 +147,10 @@ impl Traffic {
             "httpVersion": self.res_version,
             "cookies": har_res_cookies(&self.res_headers),
             "headers": har_headers(&self.res_headers),
-            "content": har_res_body(&res_body, &self.res_headers),
+            "content": har_res_body(&res_body, self.res_body_size.unwrap_or_default(), &self.res_headers),
             "redirectURL": get_header_value(&self.res_headers, "location").unwrap_or_default(),
-            "headersSize": har_size(&self.res_headers.as_ref().map(|v| v.size)),
-            "bodySize": har_size(&res_body.as_ref().map(|v| v.raw_size)),
+            "headersSize": har_size(self.res_headers.as_ref().map(|v| v.size), -1),
+            "bodySize": har_size(self.res_body_size, -1),
         });
         Some(json!({
             "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
@@ -176,7 +169,8 @@ impl Traffic {
     }
 
     pub async fn curl(&self) -> String {
-        let req_body = self.read_req_body().await;
+        let req_body = Body::read(&self.req_body_file).await;
+
         let mut output = format!("curl {}", self.uri);
         let escape_single_quote = |v: &str| v.replace('\'', r#"'\''"#);
         if self.method != "GET" {
@@ -187,25 +181,24 @@ impl Traffic {
             None => &[],
         };
         for header in headers {
-            if header.name != "content-length" {
-                output.push_str(&format!(
-                    " \\\n  -H '{}: {}'",
-                    header.name,
-                    escape_single_quote(&header.value)
-                ))
+            if ["content-length", "host"].contains(&header.name.as_str()) {
+                continue;
             }
+            output.push_str(&format!(
+                " \\\n  -H '{}: {}'",
+                header.name,
+                escape_single_quote(&header.value)
+            ))
         }
         if let Some(body) = req_body {
-            if !body.is_empty() {
-                if body.is_utf8() {
-                    output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
-                } else {
-                    output.push_str(" \\\n  --data-binary @-");
-                    output = format!(
-                        "echo {} | \\\n  base64 --decode | \\\n  {}",
-                        body.value, output
-                    );
-                }
+            if body.is_utf8() {
+                output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
+            } else {
+                output.push_str(" \\\n  --data-binary @-");
+                output = format!(
+                    "echo {} | \\\n  base64 --decode | \\\n  {}",
+                    body.value, output
+                );
             }
         }
         output
@@ -213,8 +206,7 @@ impl Traffic {
 
     pub async fn json(&self) -> Value {
         let mut value = json!(self);
-        let req_body = self.read_req_body().await;
-        let res_body = self.read_res_body().await;
+        let (req_body, res_body) = self.bodies().await;
         value["req_body"] = json!(req_body);
         value["res_body"] = json!(res_body);
         value
@@ -222,7 +214,7 @@ impl Traffic {
 
     pub async fn export(&self, format: &str) -> Result<(String, &'static str)> {
         match format {
-            "markdown" => Ok((self.markdown(false).await, "text/markdown; charset=UTF-8")),
+            "markdown" => Ok((self.markdown().await, "text/markdown; charset=UTF-8")),
             "har" => Ok((
                 serde_json::to_string_pretty(&self.har().await)?,
                 "application/json; charset=UTF-8",
@@ -236,15 +228,15 @@ impl Traffic {
         }
     }
 
-    pub(crate) fn head(&self) -> TrafficHead {
+    pub(crate) fn head(&self, id: usize) -> TrafficHead {
         TrafficHead {
-            id: self.id,
+            id,
             method: self.method.clone(),
             uri: self.uri.clone(),
             status: self.status,
-            size: self.size,
+            size: self.res_body_size,
             time: self.time,
-            mime: extract_content_type(&self.res_headers).map(|v| v.to_string()),
+            mime: extract_mime(&self.res_headers).to_string(),
         }
     }
 
@@ -297,24 +289,25 @@ impl Traffic {
         self.record_time = Some(Instant::now());
     }
 
-    pub(crate) async fn done_record_time(&mut self) -> TrafficHead {
-        if let Some(instant) = self.record_time.take() {
-            self.time = Some(instant.elapsed().as_millis() as usize);
+    pub(crate) fn done_res_body(&mut self, id: usize, raw_size: u64) -> TrafficHead {
+        if raw_size == 0 {
+            self.res_body_file = None;
         }
-        let res_body = self.read_res_body().await;
-        self.size = res_body.as_ref().map(|v| v.raw_size);
-        self.head()
+        if self.error.is_none() {
+            if let Some(instant) = self.record_time.take() {
+                self.time = Some(instant.elapsed().as_millis() as usize);
+            }
+            self.res_body_size = Some(raw_size);
+        }
+        self.record_time = None;
+        self.head(id)
     }
 
-    pub async fn read_req_body(&self) -> Option<Body> {
-        let path = self.req_body_file.as_ref()?;
-        Body::read(path, "").await.ok()
-    }
-
-    pub async fn read_res_body(&self) -> Option<Body> {
-        let path = self.res_body_file.as_ref()?;
-        let encoding = get_header_value(&self.res_headers, "content-encoding").unwrap_or_default();
-        Body::read(path, encoding).await.ok()
+    pub(crate) async fn bodies(&self) -> (Option<Body>, Option<Body>) {
+        tokio::join!(
+            Body::read(&self.req_body_file),
+            Body::read(&self.res_body_file)
+        )
     }
 }
 
@@ -324,15 +317,15 @@ pub struct TrafficHead {
     pub method: String,
     pub uri: String,
     pub status: Option<u16>,
-    pub size: Option<usize>,
+    pub size: Option<u64>,
     pub time: Option<usize>,
-    pub mime: Option<String>,
+    pub mime: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Headers {
     pub items: Vec<Header>,
-    pub size: usize,
+    pub size: u64,
 }
 
 impl Headers {
@@ -363,46 +356,41 @@ impl Header {
 pub struct Body {
     pub encode: String,
     pub value: String,
-    pub raw_size: usize,
-    pub size: usize,
+    pub size: u64,
 }
 
 impl Body {
-    pub async fn read(path: &str, encoding: &str) -> Result<Self> {
-        let raw_data = tokio::fs::read(path).await?;
-        let data = decompress(&raw_data, encoding).await?;
-        Ok(Self::bytes(&data, raw_data.len()))
+    pub async fn read(path: &Option<String>) -> Option<Self> {
+        let path = path.as_ref()?;
+        let data = tokio::fs::read(path).await.ok()?;
+        if data.is_empty() {
+            return None;
+        }
+        Some(Self::bytes(&data))
     }
 
-    pub fn bytes(data: &[u8], raw_size: usize) -> Self {
+    pub fn bytes(data: &[u8]) -> Self {
         let size = data.len();
         match std::str::from_utf8(data) {
             Ok(value) => Body {
                 encode: "utf8".to_string(),
                 value: value.to_string(),
-                raw_size,
-                size,
+                size: size as _,
             },
             Err(_) => Body {
                 encode: "base64".to_string(),
                 value: STANDARD.encode(data),
-                raw_size,
-                size,
+                size: size as _,
             },
         }
     }
 
-    pub fn text(value: &str, raw_size: usize) -> Self {
+    pub fn text(value: &str) -> Self {
         Body {
             encode: "utf8".to_string(),
             value: value.to_string(),
-            raw_size,
-            size: value.len(),
+            size: value.len() as _,
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
     }
 
     pub fn is_utf8(&self) -> bool {
@@ -425,46 +413,24 @@ fn render_header(title: &str, headers: &Headers) -> String {
     )
 }
 
-fn render_body(title: &str, body: &Body, headers: &Option<Headers>, print: bool) -> String {
-    let content_type = extract_content_type(headers).unwrap_or_default();
+pub(crate) fn render_body(
+    title: &str,
+    body: &Body,
+    body_path: &str,
+    headers: &Option<Headers>,
+) -> String {
+    let content_type = extract_mime(headers);
     if body.is_utf8() {
         let body_value = &body.value;
-        let lang = md_lang(content_type);
+        let lang = to_md_lang(content_type);
         format!(
             r#"{title}
 ```{lang}
 {body_value}
 ```"#
         )
-    } else if print {
-        let Ok(bytes) = STANDARD.decode(&body.value) else {
-            return String::new();
-        };
-        let body_bytes = if bytes.len() > HEX_VIEW_SIZE * 2 {
-            let dots = "⋅".repeat(67);
-            format!(
-                "{}\n{}\n{}",
-                render_bytes(&bytes[0..HEX_VIEW_SIZE]),
-                dots,
-                render_bytes(&bytes[bytes.len() - HEX_VIEW_SIZE..]),
-            )
-        } else {
-            render_bytes(&bytes).to_string()
-        };
-        format!(
-            r#"{title}
-```
-{body_bytes}
-```"#
-        )
     } else {
-        let body_value = &body.value;
-        format!(
-            r#"{title}
-```
-data:{content_type};base64,{body_value}
-```"#
-        )
+        format!("{title}\n\n[BINARY DATA]({body_path})")
     }
 }
 
@@ -482,16 +448,6 @@ fn render_error(error: &str) -> String {
     }
 }
 
-fn render_bytes(source: &[u8]) -> String {
-    let config = pretty_hex::HexConfig {
-        title: false,
-        chunk: 2,
-        ..Default::default()
-    };
-
-    pretty_hex::config_hex(&source, config)
-}
-
 fn har_headers(headers: &Option<Headers>) -> Value {
     match headers {
         Some(headers) => headers.items.iter().map(|header| json!(header)).collect(),
@@ -499,8 +455,8 @@ fn har_headers(headers: &Option<Headers>) -> Value {
     }
 }
 
-fn har_size(size: &Option<usize>) -> isize {
-    size.map(|v| v as isize).unwrap_or(-1)
+fn har_size(size: Option<u64>, default_value: i64) -> i64 {
+    size.map(|v| v as i64).unwrap_or(default_value)
 }
 
 fn har_query_string(url: &str) -> Value {
@@ -545,17 +501,15 @@ fn har_req_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
     }
 }
 
-fn har_res_body(body: &Option<Body>, headers: &Option<Headers>) -> Value {
+fn har_res_body(body: &Option<Body>, raw_size: u64, headers: &Option<Headers>) -> Value {
     let content_type = get_header_value(headers, "content-type").unwrap_or_default();
     match body {
         Some(body) => {
-            let size = body.size;
-            let raw_size = body.raw_size;
-            let mut value = json!({"size": har_size(&Some(raw_size)), "mimeType": content_type, "text": body.value});
+            let mut value = json!({"size": raw_size, "mimeType": content_type, "text": body.value});
             if !body.is_utf8() {
                 value["encoding"] = "base64".into();
             }
-            value["compression"] = (size as isize - raw_size as isize).into();
+            value["compression"] = (body.size as isize - raw_size as isize).into();
             value
         }
         None => json!({"size": 0, "mimeType": content_type, "text": ""}),
@@ -599,11 +553,13 @@ fn har_res_cookies(headers: &Option<Headers>) -> Value {
     }
 }
 
-fn extract_content_type(headers: &Option<Headers>) -> Option<&str> {
-    get_header_value(headers, "content-type").map(|v| match v.split_once(';') {
-        Some((v, _)) => v.trim(),
-        None => v,
-    })
+pub(crate) fn extract_mime(headers: &Option<Headers>) -> &str {
+    get_header_value(headers, "content-type")
+        .map(|v| match v.split_once(';') {
+            Some((v, _)) => v.trim(),
+            None => v,
+        })
+        .unwrap_or_default()
 }
 
 fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a str> {
@@ -615,10 +571,93 @@ fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a s
     })
 }
 
-fn md_lang(content_type: &str) -> &str {
-    if let Some(value) = content_type
+pub(crate) fn to_ext_name(mime: &str) -> &str {
+    match mime {
+        "audio/aac" => ".aac",
+        "application/x-abiword" => ".abw",
+        "image/apng" => ".apng",
+        "application/x-freearc" => ".arc",
+        "image/avif" => ".avif",
+        "video/x-msvideo" => ".avi",
+        "application/vnd.amazon.ebook" => ".azw",
+        "application/octet-stream" => ".bin",
+        "image/bmp" => ".bmp",
+        "application/x-bzip" => ".bz",
+        "application/x-bzip2" => ".bz2",
+        "application/x-cdf" => ".cda",
+        "application/x-csh" => ".csh",
+        "text/css" => ".css",
+        "text/csv" => ".csv",
+        "application/msword" => ".doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
+        "application/vnd.ms-fontobject" => ".eot",
+        "application/epub+zip" => ".epub",
+        "application/gzip" | "application/x-gzip" => ".gz",
+        "image/gif" => ".gif",
+        "text/html" | "text/htm" => ".html",
+        "image/vnd.microsoft.icon" => ".ico",
+        "text/calendar" => ".ics",
+        "application/java-archive" => ".jar",
+        "image/jpeg" => ".jpeg",
+        "text/javascript" => ".js",
+        "application/json" => ".json",
+        "application/ld+json" => ".jsonld",
+        "audio/midi" | "audio/x-midi" => ".mid",
+        "audio/mpeg" => ".mp3",
+        "video/mp4" => ".mp4",
+        "video/mpeg" => ".mpeg",
+        "application/vnd.apple.installer+xml" => ".mpkg",
+        "application/vnd.oasis.opendocument.presentation" => ".odp",
+        "application/vnd.oasis.opendocument.spreadsheet" => ".ods",
+        "application/vnd.oasis.opendocument.text" => ".odt",
+        "audio/ogg" => ".oga",
+        "video/ogg" => ".ogv",
+        "application/ogg" => ".ogx",
+        "font/otf" => ".otf",
+        "image/png" => ".png",
+        "application/pdf" => ".pdf",
+        "application/x-httpd-php" => ".php",
+        "application/vnd.ms-powerpoint" => ".ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
+        "application/vnd.rar" => ".rar",
+        "application/rtf" => ".rtf",
+        "application/x-sh" => ".sh",
+        "image/svg+xml" => ".svg",
+        "application/x-tar" => ".tar",
+        "image/tiff" => ".tif",
+        "video/mp2t" => ".ts",
+        "font/ttf" => ".ttf",
+        "text/plain" => ".txt",
+        "application/vnd.visio" => ".vsd",
+        "audio/wav" => ".wav",
+        "audio/webm" => ".weba",
+        "video/webm" => ".webm",
+        "image/webp" => ".webp",
+        "font/woff" => ".woff",
+        "font/woff2" => ".woff2",
+        "application/xhtml+xml" => ".xhtml",
+        "application/vnd.ms-excel" => ".xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
+        "application/xml" | "text/xml" => ".xml",
+        "application/vnd.mozilla.xul+xml" => ".xul",
+        "application/zip" | "x-zip-compressed" => ".zip",
+        "video/3gpp" | "audio/3gpp" => ".3gp",
+        "video/3gpp2" | "audio/3gpp2" => ".3g2",
+        "application/x-7z-compressed" => ".7z",
+        _ => {
+            if mime.starts_with("text/") {
+                ".txt"
+            } else {
+                ""
+            }
+        }
+    }
+}
+
+pub(crate) fn to_md_lang(mime: &str) -> &str {
+    if let Some(value) = mime
         .strip_prefix("text/")
-        .or_else(|| content_type.strip_prefix("application/"))
+        .or_else(|| mime.strip_prefix("application/"))
     {
         if let Some(value) = value.strip_prefix("x-") {
             value
@@ -629,32 +668,6 @@ fn md_lang(content_type: &str) -> &str {
         ""
     }
 }
-
-async fn decompress(data: &[u8], encoding: &str) -> Result<Vec<u8>> {
-    match encoding {
-        "deflate" => decompress_deflate(data).await,
-        "gzip" => decompress_gzip(data).await,
-        "br" => decompress_br(data).await,
-        "zstd" => decompress_zstd(data).await,
-        _ => Ok(data.to_vec()),
-    }
-}
-
-macro_rules! decompress_fn {
-    ($fn_name:ident, $decoder:ident) => {
-        async fn $fn_name(in_data: &[u8]) -> Result<Vec<u8>> {
-            let mut decoder = $decoder::new(Vec::new());
-            decoder.write_all(in_data).await?;
-            decoder.shutdown().await?;
-            Ok(decoder.into_inner())
-        }
-    };
-}
-
-decompress_fn!(decompress_deflate, DeflateDecoder);
-decompress_fn!(decompress_gzip, GzipDecoder);
-decompress_fn!(decompress_br, BrotliDecoder);
-decompress_fn!(decompress_zstd, ZstdDecoder);
 
 pub(crate) fn wrap_entries(entries: Vec<Value>) -> Value {
     json!({
@@ -686,11 +699,13 @@ fn map_headers(headers: &HeaderMap) -> Vec<Header> {
         .collect()
 }
 
-fn cal_headers_size(headers: &HeaderMap) -> usize {
+fn cal_headers_size(headers: &HeaderMap) -> u64 {
     headers
         .iter()
-        .map(|(key, value)| key.as_str().as_bytes().len() + value.as_bytes().len() + 12)
-        .sum::<usize>()
+        .map(|(key, value)| {
+            key.as_str().as_bytes().len() as u64 + value.as_bytes().len() as u64 + 12
+        })
+        .sum::<u64>()
         + 7
 }
 
@@ -714,58 +729,32 @@ mod tests {
 
     #[test]
     fn test_render_body() {
-        let body = Body::bytes(
-            &[
-                0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
-                0x0f, 0x83,
-            ],
-            16,
-        );
+        let body = Body::bytes(&[
+            0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
+            0x0f, 0x83,
+        ]);
         let output = render_body(
-            "REQUEST BODY",
+            "RESPONSE BODY",
             &body,
+            "/tmp/proxyfor-666/1-res",
             &Some(create_headers(&[(
                 "content-type",
                 "application/octet-stream",
             )])),
-            false,
         );
-        let expect = r#"REQUEST BODY
-```
-data:application/octet-stream;base64,a04aw68D0h5+c7rIvYQPgw==
-```"#;
-        assert_eq!(output, expect);
-    }
+        let expect = r#"RESPONSE BODY
 
-    #[test]
-    fn test_render_body_print() {
-        let body = Body::bytes(
-            &[
-                0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
-                0x0f, 0x83,
-            ],
-            16,
-        );
-        let output = render_body(
-            "REQUEST BODY",
-            &body,
-            &Some(create_headers(&[("content-type", "plain/text")])),
-            true,
-        );
-        let expect = r#"REQUEST BODY
-```
-0000:   6b4e 1ac3 af03 d21e  7e73 bac8 bd84 0f83   kN......~s......
-```"#;
+[BINARY DATA](/tmp/proxyfor-666/1-res)"#;
         assert_eq!(output, expect);
     }
 
     #[test]
     fn test_md_lang() {
-        assert_eq!(md_lang("application/json"), "json");
-        assert_eq!(md_lang("application/xml"), "xml");
-        assert_eq!(md_lang("application/octet-stream"), "octet-stream");
-        assert_eq!(md_lang("application/javascript"), "javascript");
-        assert_eq!(md_lang("text/x-rust"), "rust");
-        assert_eq!(md_lang("text/css"), "css");
+        assert_eq!(to_md_lang("application/json"), "json");
+        assert_eq!(to_md_lang("application/xml"), "xml");
+        assert_eq!(to_md_lang("application/octet-stream"), "octet-stream");
+        assert_eq!(to_md_lang("application/javascript"), "javascript");
+        assert_eq!(to_md_lang("text/x-rust"), "rust");
+        assert_eq!(to_md_lang("text/css"), "css");
     }
 }

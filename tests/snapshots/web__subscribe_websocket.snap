@@ -2,7 +2,7 @@
 source: tests/web.rs
 expression: output
 ---
-{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello","raw_size":5,"size":5}}}
-{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world","raw_size":5,"size":5}}}
-{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello","raw_size":5,"size":5}}}
-{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world","raw_size":5,"size":5}}}
+{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello","size":5}}}
+{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world","size":5}}}
+{"data":{"create":"<DATETIME>","server_to_client":false,"body":{"encode":"utf8","value":"hello","size":5}}}
+{"data":{"create":"<DATETIME>","server_to_client":true,"body":{"encode":"utf8","value":"world","size":5}}}

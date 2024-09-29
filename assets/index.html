@@ -367,7 +367,7 @@
          * @property {?number} status
          * @property {?number} size
          * @property {?number} time
-         * @property {?string} mime
+         * @property {string} mime
          */
 
         /**
@@ -875,7 +875,7 @@
                         filename = disposition.match(/filename="(.*?)"/)[1] || filename;
                     }
                     let downloadUrl = URL.createObjectURL(base64ToBlob(value, contentType || "application/octet-stream"));
-                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download</a></div>`;
+                    return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary data</a></div>`;
                 }
             }
             return `<div class="code-view">${value}</div>`;

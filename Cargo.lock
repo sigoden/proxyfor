@@ -159,14 +159,11 @@ version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
 dependencies = [
- "brotli",
  "flate2",
  "futures-core",
  "memchr",
  "pin-project-lite",
  "tokio",
- "zstd",
- "zstd-safe",
 ]
 
 [[package]]
@@ -667,9 +664,9 @@ dependencies = [
 
 [[package]]
 name = "flate2"
-version = "1.0.33"
+version = "1.0.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "324a1be68054ef05ad64b861cc9eaf1d623d2d8cb25b4bf2cb9cdd902b4bf253"
+checksum = "a1b589b4dc103969ad3cf85c950899926ec64300a1a46d76c03a6072957036f0"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -1460,12 +1457,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pretty-hex"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbc83ee4a840062f368f9096d80077a9841ec117e17e7f700df81958f1451254"
-
-[[package]]
 name = "pretty_assertions"
 version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1492,12 +1483,14 @@ dependencies = [
  "async-compression",
  "async-http-proxy",
  "base64",
+ "brotli",
  "bytes",
  "clap",
  "cookie",
  "crossterm",
  "dirs",
  "fancy-regex",
+ "flate2",
  "futures-util",
  "http",
  "http-body-util",
@@ -1510,7 +1503,6 @@ dependencies = [
  "log",
  "moka",
  "pin-project-lite",
- "pretty-hex",
  "pretty_assertions",
  "rand",
  "ratatui",
@@ -1530,6 +1522,7 @@ dependencies = [
  "tokio-util",
  "unicode-width 0.2.0",
  "url",
+ "zstd",
 ]
 
 [[package]]

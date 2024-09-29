@@ -5,7 +5,7 @@ use crate::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, Event, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -24,7 +24,7 @@ use std::{
 use tokio::sync::mpsc;
 use unicode_width::UnicodeWidthStr;
 
-const TICK_INTERVAL: u64 = 200;
+const TICK_INTERVAL: u64 = 250;
 const LARGE_WIDTH: u16 = 100;
 const SELECTED_STYLE: Style = Style::new().bg(GRAY.c800).add_modifier(Modifier::BOLD);
 
@@ -40,18 +40,14 @@ pub async fn run(state: Arc<State>, addr: &str) -> Result<()> {
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let ret = App::new(state, addr, message_tx).run(&mut terminal, message_rx);
 
     disable_raw_mode()?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen,)?;
     terminal.show_cursor()?;
 
     ret
@@ -137,8 +133,7 @@ impl App {
             let Some(traffic) = state.get_traffic(traffic_id).await else {
                 return;
             };
-            let req_body = traffic.read_req_body().await;
-            let res_body = traffic.read_res_body().await;
+            let (req_body, res_body) = traffic.bodies().await;
             let _ = message_tx.send(Message::TrafficDetails(Box::new((
                 traffic, req_body, res_body,
             ))));
@@ -170,6 +165,9 @@ impl App {
     fn handle_events(&mut self, timeout: Duration) -> Result<()> {
         if crossterm::event::poll(timeout)? {
             if let Event::Key(key) = event::read()? {
+                if key.kind != event::KeyEventKind::Press {
+                    return Ok(());
+                }
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if self.current_view == View::Details {
@@ -230,7 +228,6 @@ impl App {
                             && self.traffic_table_state.selected().is_some()
                         {
                             self.current_view = View::Details;
-                            self.current_tab_index = 0;
                             self.current_tab_content_scroll_offset = 0;
                             self.current_tab_content_scroll_size = None;
                             self.sync_current_traffic();
@@ -269,7 +266,7 @@ impl App {
         if area.width > LARGE_WIDTH {
             let method_width = 8;
             let status_width = 4;
-            let mime_width = 16;
+            let mime_width = 17;
             let size_width = 8;
             let time_delta_width = 6;
             let uri_width = area.width
@@ -284,7 +281,7 @@ impl App {
                 let uri = ellipsis_tail(&head.uri, uri_width - 1);
                 let method = ellipsis_tail(&head.method, method_width - 1);
                 let status = head.status.map(|v| v.to_string()).unwrap_or_default();
-                let mime = ellipsis_head(&head.mime.clone().unwrap_or_default(), mime_width - 1);
+                let mime = ellipsis_head(&head.mime.clone(), mime_width - 1);
                 let size = format_size(head.size.map(|v| v as _));
                 let time_delta = format_time_delta(head.time.map(|v| v as _));
                 [
@@ -348,36 +345,41 @@ impl App {
         } else {
             (Style::default(), SELECTED_STYLE)
         };
+        let Some((traffic, req_body, res_body)) = self.current_traffic.as_deref() else {
+            return;
+        };
+        let tab_second_title = match &traffic.error {
+            Some(_) => "Error",
+            None => "Response",
+        };
         let block = Block::bordered().title(Line::from(vec![
             Span::raw(" "),
             Span::styled("Request", request_style),
             Span::raw(" / "),
-            Span::styled("Response", response_style),
+            Span::styled(tab_second_title, response_style),
             Span::raw(" "),
         ]));
-        let Some((traffic, req_body, res_body)) = self.current_traffic.as_deref() else {
-            let paragraph = Paragraph::new(Text::from(""))
-                .block(block)
-                .wrap(Wrap { trim: true });
-            frame.render_widget(paragraph, chunks[1]);
-            return;
-        };
-        let (headers, body) = if is_req {
-            (traffic.req_headers.as_ref(), req_body.as_ref())
-        } else {
-            (traffic.res_headers.as_ref(), res_body.as_ref())
-        };
         let width = area.width - 2;
         let mut texts = vec![];
+        let (headers, body, body_file) = if is_req {
+            (&traffic.req_headers, req_body, &traffic.req_body_file)
+        } else if let Some(error) = &traffic.error {
+            texts.push(Line::raw(error));
+            (&None, &None, &None)
+        } else {
+            (&traffic.res_headers, res_body, &traffic.res_body_file)
+        };
         if let Some(headers) = headers {
             for header in &headers.items {
                 texts.push(Line::raw(format!("{}: {}", header.name, header.value)));
             }
         }
-        if let Some(body) = body {
-            if !body.is_empty() {
-                texts.push(Line::raw("—".repeat(width as _)));
+        if let (Some(body), Some(body_file)) = (body, body_file) {
+            texts.push(Line::raw("—".repeat(width as _)));
+            if body.is_utf8() {
                 texts.extend(body.value.lines().map(Line::raw));
+            } else {
+                texts.push(Line::raw(body_file).style(Style::default().underlined()));
             }
         }
         let paragraph = Paragraph::new(texts)
@@ -414,7 +416,7 @@ fn generate_title(head: &TrafficHead, width: u16) -> String {
     let description = match head.status {
         Some(status) => {
             let padding = " ".repeat(head.method.len());
-            let mime = head.mime.as_deref().unwrap_or_default();
+            let mime = &head.mime;
             let size = format_size(head.size.map(|v| v as _));
             let time_delta = format_time_delta(head.time.map(|v| v as _));
             format!("{padding} ← {status} {mime} {size} {time_delta}")

@@ -6,25 +6,25 @@ expression: output
 
 [
   {
-    "id":<ID>,
+    "id": 1,
     "method": "GET",
     "uri": "http://localhost:<PORT>/hello",
     "status": 200,
     "size": 13,
     "time":<TIME>,
-    "mime": null
+    "mime": ""
   },
   {
-    "id":<ID>,
+    "id": 2,
     "method": "GET",
     "uri": "http://localhost:<PORT>/hello/gzip",
     "status": 200,
     "size": 33,
     "time":<TIME>,
-    "mime": null
+    "mime": ""
   },
   {
-    "id":<ID>,
+    "id": 3,
     "method": "POST",
     "uri": "http://localhost:<PORT>/echo",
     "status": 200,
@@ -320,16 +320,13 @@ Hello, World!
 /traffics?curl
 
 curl http://localhost:<PORT>/hello \
-  -H 'accept: */*' \
-  -H 'host: localhost:<PORT>'
+  -H 'accept: */*'
 
 curl http://localhost:<PORT>/hello/gzip \
-  -H 'accept: */*' \
-  -H 'host: localhost:<PORT>'
+  -H 'accept: */*'
 
 curl http://localhost:<PORT>/echo \
   -X POST \
   -H 'content-type: text/plain' \
   -H 'accept: */*' \
-  -H 'host: localhost:<PORT>' \
   -d 'Hello, World!'

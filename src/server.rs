@@ -3,7 +3,7 @@ use crate::{
     filter::{is_match_title, is_match_type, TitleFilter},
     rewind::Rewind,
     state::State,
-    traffic::Traffic,
+    traffic::{extract_mime, to_ext_name, Traffic},
 };
 
 use anyhow::{anyhow, Context as _, Result};
@@ -11,8 +11,8 @@ use bytes::Bytes;
 use futures_util::{stream, Sink, SinkExt, Stream, StreamExt, TryStreamExt};
 use http::{
     header::{
-        CACHE_CONTROL, CONNECTION, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
-        PROXY_AUTHORIZATION,
+        CACHE_CONTROL, CONNECTION, CONTENT_DISPOSITION, CONTENT_ENCODING, CONTENT_LENGTH,
+        CONTENT_TYPE, PROXY_AUTHORIZATION,
     },
     uri::{Authority, Scheme},
     HeaderValue,
@@ -35,7 +35,7 @@ use pin_project_lite::pin_project;
 use serde::Serialize;
 use std::{
     fs::File,
-    io::Write,
+    io::{Read, Write},
     path::PathBuf,
     pin::Pin,
     process,
@@ -59,7 +59,7 @@ const CERT_INDEX: &str = include_str!("../assets/install-certificate.html");
 
 type Request = hyper::Request<Incoming>;
 type Response = hyper::Response<BoxBody<Bytes, anyhow::Error>>;
-type TrafficDoneSender = mpsc::UnboundedSender<usize>;
+type TrafficDoneSender = mpsc::UnboundedSender<(usize, u64)>;
 
 pub struct ServerBuilder {
     ca: CertificateAuthority,
@@ -168,8 +168,8 @@ impl Server {
             }
         });
         tokio::spawn(async move {
-            while let Some(id) = traffic_done_rx.recv().await {
-                self.state.done_traffic(id).await;
+            while let Some((id, raw_size)) = traffic_done_rx.recv().await {
+                self.state.done_traffic(id, raw_size).await;
             }
         });
         Ok(stop_tx)
@@ -296,7 +296,8 @@ impl Server {
         } else {
             None
         };
-        let req_body = BodyWrapper::new(req.into_body(), req_body_file, None);
+
+        let req_body = BodyWrapper::new(req.into_body(), req_body_file, "".into(), None);
 
         let proxy_req = match builder.body(req_body) {
             Ok(v) => v,
@@ -798,7 +799,11 @@ impl Server {
 
         let mut res = Response::default();
 
+        let mut encoding = String::new();
         for (key, value) in proxy_res_headers.iter() {
+            if key == CONTENT_ENCODING {
+                encoding = value.to_str().map(|v| v.to_string()).unwrap_or_default();
+            }
             res.headers_mut().insert(key.clone(), value.clone());
         }
 
@@ -823,7 +828,8 @@ impl Server {
         let res_body = BodyWrapper::new(
             proxy_res.into_body(),
             res_body_file,
-            Some((traffic.id, traffic_done_tx)),
+            encoding,
+            Some((traffic.gid, traffic_done_tx)),
         );
 
         *res.body_mut() = BoxBody::new(res_body);
@@ -841,16 +847,18 @@ impl Server {
         let mut res = Response::default();
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
 
-        let traffic_id = traffic.id;
+        let gid = traffic.gid;
         traffic.add_error(error.to_string());
         self.state.add_traffic(traffic).await;
-        self.state.done_traffic(traffic_id).await;
+        self.state.done_traffic(gid, 0).await;
 
         Ok(res)
     }
 
     fn req_body_file(&self, traffic: &mut Traffic) -> Result<File> {
-        let path = self.temp_dir.join(format!("{}-req", traffic.id));
+        let mime = extract_mime(&traffic.req_headers);
+        let ext_name = to_ext_name(mime);
+        let path = self.temp_dir.join(format!("{}-req{ext_name}", traffic.gid));
         let file = File::create(&path).with_context(|| {
             format!(
                 "Failed to create file '{}' to store request body",
@@ -862,7 +870,9 @@ impl Server {
     }
 
     fn res_body_file(&self, traffic: &mut Traffic) -> Result<File> {
-        let path = self.temp_dir.join(format!("{}-res", traffic.id));
+        let mime = extract_mime(&traffic.res_headers);
+        let ext_name = to_ext_name(mime);
+        let path = self.temp_dir.join(format!("{}-res{ext_name}", traffic.gid));
         let file = File::create(&path).with_context(|| {
             format!(
                 "Failed to create file '{}' to store response body",
@@ -887,12 +897,14 @@ pin_project! {
         #[pin]
         inner: B,
         file: Option<File>,
+        encoding: String,
         traffic_done: Option<(usize, TrafficDoneSender)>,
+        raw_size: u64,
     }
     impl<B> PinnedDrop for BodyWrapper<B> {
         fn drop(this: Pin<&mut Self>) {
             if let Some((id, traffic_done_tx)) = this.traffic_done.as_ref() {
-                let _ = traffic_done_tx.send(*id);
+                let _ = traffic_done_tx.send((*id, this.raw_size));
             }
         }
      }
@@ -902,12 +914,15 @@ impl<B> BodyWrapper<B> {
     pub fn new(
         inner: B,
         file: Option<File>,
+        encoding: String,
         traffic_done: Option<(usize, TrafficDoneSender)>,
     ) -> Self {
         Self {
             inner,
             file,
+            encoding,
             traffic_done,
+            raw_size: 0,
         }
     }
 }
@@ -927,9 +942,12 @@ where
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
                 Ok(data) => {
-                    if let Some(file) = this.file.as_mut() {
-                        let _ = file.write_all(&data);
-                    }
+                    if let Ok(new_data) = decompress(&data, this.encoding) {
+                        if let Some(file) = this.file.as_mut() {
+                            let _ = file.write_all(&new_data);
+                        }
+                    };
+                    *this.raw_size += data.len() as u64;
                     Poll::Ready(Some(Ok(Frame::data(data))))
                 }
                 Err(e) => Poll::Ready(Some(Ok(e))),
@@ -981,4 +999,34 @@ fn ignore_tungstenite_error(err: &tungstenite::Error) -> bool {
                 tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
             )
     )
+}
+
+fn decompress(data: &[u8], encoding: &str) -> Result<Vec<u8>> {
+    match encoding {
+        "gzip" => {
+            let mut decoder = flate2::read::GzDecoder::new(data);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        }
+        "deflate" => {
+            let mut decoder = flate2::read::DeflateDecoder::new(data);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        }
+        "br" => {
+            let mut decoder = brotli::Decompressor::new(data, 4096);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        }
+        "zstd" => {
+            let mut decoder = zstd::stream::Decoder::new(data)?;
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            Ok(decompressed)
+        }
+        _ => Ok(data.to_vec()),
+    }
 }

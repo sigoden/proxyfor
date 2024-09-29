@@ -5,7 +5,7 @@ expression: output
 /traffic/:id
 
 {
-  "id":<ID>,
+  "gid":<GID>,
   "uri": "http://localhost:<PORT>/echo",
   "method": "POST",
   "start": "<DATETIME>",
@@ -32,6 +32,7 @@ expression: output
     ],
     "size": 121
   },
+  "req_body_file":"<BODY_FILE>",
   "status": 200,
   "res_version": "HTTP/1.1",
   "res_headers": {
@@ -51,18 +52,18 @@ expression: output
     ],
     "size": 114
   },
+  "res_body_file":"<BODY_FILE>",
+  "res_body_size": 13,
   "websocket_id": null,
   "error": null,
   "req_body": {
     "encode": "utf8",
     "value": "Hello, World!",
-    "raw_size": 13,
     "size": 13
   },
   "res_body": {
     "encode": "utf8",
     "value": "Hello, World!",
-    "raw_size": 13,
     "size": 13
   }
 }
@@ -191,5 +192,4 @@ curl http://localhost:<PORT>/echo \
   -X POST \
   -H 'content-type: text/plain' \
   -H 'accept: */*' \
-  -H 'host: localhost:<PORT>' \
   -d 'Hello, World!'

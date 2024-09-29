@@ -38,17 +38,19 @@ impl State {
             return;
         }
         let mut traffics = self.traffics.lock().await;
-        let head = traffic.head();
-        traffics.insert(traffic.id, traffic);
+        let id = traffics.len() + 1;
+        let head = traffic.head(id);
+        traffics.insert(id, traffic);
         let _ = self.traffics_notifier.send(head);
     }
 
-    pub async fn done_traffic(&self, traffic_id: usize) {
+    pub async fn done_traffic(&self, gid: usize, raw_size: u64) {
         let mut traffics = self.traffics.lock().await;
-        let Some(traffic) = traffics.get_mut(&traffic_id) else {
+        let Some((id, traffic)) = traffics.iter_mut().find(|(_, v)| v.gid == gid) else {
             return;
         };
-        let head = traffic.done_record_time().await;
+
+        let head = traffic.done_res_body(*id, raw_size);
         let _ = self.traffics_notifier.send(head);
         match self.print_mode {
             PrintMode::Nothing => {}
@@ -56,7 +58,7 @@ impl State {
                 println!("# {}", traffic.oneline());
             }
             PrintMode::Markdown => {
-                println!("{}", traffic.markdown(true).await);
+                println!("{}", traffic.markdown().await);
             }
         }
     }
@@ -72,16 +74,18 @@ impl State {
 
     pub async fn list_heads(&self) -> Vec<TrafficHead> {
         let traffics = self.traffics.lock().await;
-        traffics.values().map(|v| v.head()).collect()
+        traffics
+            .iter()
+            .map(|(id, traffic)| traffic.head(*id))
+            .collect()
     }
 
     pub async fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
         let traffics = self.traffics.lock().await;
-        let traffics: Vec<Traffic> = traffics.iter().map(|(_, v)| v.clone()).collect();
         match format {
             "markdown" => {
                 let output =
-                    futures_util::future::join_all(traffics.iter().map(|v| v.markdown(false)))
+                    futures_util::future::join_all(traffics.iter().map(|(_, v)| v.markdown()))
                         .await
                         .into_iter()
                         .collect::<Vec<String>>()
@@ -90,7 +94,7 @@ impl State {
             }
             "har" => {
                 let values: Vec<Value> =
-                    futures_util::future::join_all(traffics.iter().map(|v| v.har_entry()))
+                    futures_util::future::join_all(traffics.iter().map(|(_, v)| v.har_entry()))
                         .await
                         .into_iter()
                         .flatten()
@@ -100,7 +104,7 @@ impl State {
                 Ok((output, "application/json; charset=UTF-8"))
             }
             "curl" => {
-                let output = futures_util::future::join_all(traffics.iter().map(|v| v.curl()))
+                let output = futures_util::future::join_all(traffics.iter().map(|(_, v)| v.curl()))
                     .await
                     .into_iter()
                     .collect::<Vec<String>>()
@@ -108,7 +112,7 @@ impl State {
                 Ok((output, "text/plain; charset=UTF-8"))
             }
             "mem" => {
-                let values = futures_util::future::join_all(traffics.iter().map(|v| v.json()))
+                let values = futures_util::future::join_all(traffics.iter().map(|(_, v)| v.json()))
                     .await
                     .into_iter()
                     .collect::<Vec<Value>>();
@@ -118,7 +122,7 @@ impl State {
             "" => {
                 let values = traffics
                     .iter()
-                    .map(|v| v.head())
+                    .map(|(id, traffic)| traffic.head(*id))
                     .collect::<Vec<TrafficHead>>();
                 let output = serde_json::to_string_pretty(&values)?;
                 Ok((output, "application/json; charset=UTF-8"))
@@ -155,8 +159,8 @@ impl State {
             return;
         };
         let body = match message {
-            tungstenite::Message::Text(text) => Body::text(text, text.len()),
-            tungstenite::Message::Binary(bin) => Body::bytes(bin, bin.len()),
+            tungstenite::Message::Text(text) => Body::text(text),
+            tungstenite::Message::Binary(bin) => Body::bytes(bin),
             _ => return,
         };
         let message = WebsocketMessage::Data(WebsocketData {
