@@ -12,7 +12,7 @@ use tokio::{sync::broadcast, sync::Mutex};
 use tokio_tungstenite::tungstenite;
 
 #[derive(Debug)]
-pub(crate) struct State {
+pub struct State {
     print_mode: PrintMode,
     traffics: Mutex<IndexMap<usize, Traffic>>,
     traffics_notifier: broadcast::Sender<TrafficHead>,
@@ -21,7 +21,7 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(print_mode: PrintMode) -> Self {
+    pub fn new(print_mode: PrintMode) -> Self {
         let (traffics_notifier, _) = broadcast::channel(16);
         let (websockets_notifier, _) = broadcast::channel(64);
         Self {
@@ -33,7 +33,7 @@ impl State {
         }
     }
 
-    pub(crate) async fn add_traffic(&self, traffic: Traffic) {
+    pub async fn add_traffic(&self, traffic: Traffic) {
         if !traffic.valid {
             return;
         }
@@ -43,7 +43,7 @@ impl State {
         let _ = self.traffics_notifier.send(head);
     }
 
-    pub(crate) async fn done_traffic(&self, traffic_id: usize) {
+    pub async fn done_traffic(&self, traffic_id: usize) {
         let mut traffics = self.traffics.lock().await;
         let Some(traffic) = traffics.get_mut(&traffic_id) else {
             return;
@@ -61,21 +61,21 @@ impl State {
         }
     }
 
-    pub(crate) async fn get_traffic(&self, id: usize) -> Option<Traffic> {
+    pub async fn get_traffic(&self, id: usize) -> Option<Traffic> {
         let traffics = self.traffics.lock().await;
         traffics.get(&id).cloned()
     }
 
-    pub(crate) fn subscribe_traffics(&self) -> broadcast::Receiver<TrafficHead> {
+    pub fn subscribe_traffics(&self) -> broadcast::Receiver<TrafficHead> {
         self.traffics_notifier.subscribe()
     }
 
-    pub(crate) async fn list_heads(&self) -> Vec<TrafficHead> {
+    pub async fn list_heads(&self) -> Vec<TrafficHead> {
         let traffics = self.traffics.lock().await;
         traffics.values().map(|v| v.head()).collect()
     }
 
-    pub(crate) async fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
+    pub async fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
         let traffics = self.traffics.lock().await;
         let traffics: Vec<Traffic> = traffics.iter().map(|(_, v)| v.clone()).collect();
         match format {
@@ -127,14 +127,14 @@ impl State {
         }
     }
 
-    pub(crate) async fn new_websocket(&self) -> usize {
+    pub async fn new_websocket(&self) -> usize {
         let mut websockets = self.websockets.lock().await;
         let id = websockets.len() + 1;
         websockets.insert(id, vec![]);
         id
     }
 
-    pub(crate) async fn add_websocket_error(&self, id: usize, error: String) {
+    pub async fn add_websocket_error(&self, id: usize, error: String) {
         let mut websockets = self.websockets.lock().await;
         let Some(messages) = websockets.get_mut(&id) else {
             return;
@@ -144,7 +144,7 @@ impl State {
         let _ = self.websockets_notifier.send((id, message));
     }
 
-    pub(crate) async fn add_websocket_message(
+    pub async fn add_websocket_message(
         &self,
         id: usize,
         message: &tungstenite::Message,
@@ -168,20 +168,20 @@ impl State {
         let _ = self.websockets_notifier.send((id, message));
     }
 
-    pub(crate) async fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
+    pub async fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
         let websockets = self.websockets.lock().await;
         let messages = websockets.get(&id)?;
         Some((messages.to_vec(), self.websockets_notifier.subscribe()))
     }
 }
 
-pub(crate) type SubscribeWebSocket = (
+pub type SubscribeWebSocket = (
     Vec<WebsocketMessage>,
     broadcast::Receiver<(usize, WebsocketMessage)>,
 );
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) enum WebsocketMessage {
+pub enum WebsocketMessage {
     #[serde(rename = "error")]
     Error(String),
     #[serde(rename = "data")]
@@ -189,7 +189,7 @@ pub(crate) enum WebsocketMessage {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub(crate) struct WebsocketData {
+pub struct WebsocketData {
     #[serde(serialize_with = "crate::traffic::serialize_datetime")]
     create: OffsetDateTime,
     server_to_client: bool,

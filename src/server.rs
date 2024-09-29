@@ -114,7 +114,7 @@ impl ServerBuilder {
             title_filters: self.title_filters,
             mime_filters: self.mime_filters,
             web: self.web,
-            state: State::new(self.print_mode),
+            state: Arc::new(State::new(self.print_mode)),
             temp_dir,
         })
     }
@@ -126,12 +126,13 @@ pub struct Server {
     title_filters: Vec<TitleFilter>,
     mime_filters: Vec<String>,
     web: bool,
-    state: State,
+    state: Arc<State>,
     temp_dir: PathBuf,
 }
 
 impl Server {
     pub async fn run(self: Arc<Self>, listener: TcpListener) -> Result<oneshot::Sender<()>> {
+        info!("Starting HTTP(S) proxy server");
         std::fs::create_dir_all(&self.temp_dir)
             .with_context(|| format!("Failed to create temp dir '{}'", self.temp_dir.display()))?;
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -172,6 +173,10 @@ impl Server {
             }
         });
         Ok(stop_tx)
+    }
+
+    pub fn state(&self) -> Arc<State> {
+        self.state.clone()
     }
 
     async fn handle(
