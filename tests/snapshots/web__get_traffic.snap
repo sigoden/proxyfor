@@ -32,6 +32,7 @@ expression: output
     ],
     "size": 121
   },
+  "req_body_file":"<BODY_FILE>",
   "status": 200,
   "res_version": "HTTP/1.1",
   "res_headers": {
@@ -51,6 +52,7 @@ expression: output
     ],
     "size": 114
   },
+  "res_body_file":"<BODY_FILE>",
   "res_body_size": 13,
   "websocket_id": null,
   "error": null,

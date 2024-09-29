@@ -24,12 +24,10 @@ pub struct Traffic {
     pub time: Option<usize>,
     pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
-    #[serde(skip)]
     pub req_body_file: Option<String>,
     pub status: Option<u16>,
     pub res_version: Option<String>,
     pub res_headers: Option<Headers>,
-    #[serde(skip)]
     pub res_body_file: Option<String>,
     pub res_body_size: Option<u64>,
     pub websocket_id: Option<usize>,
@@ -301,6 +299,7 @@ impl Traffic {
             }
             self.res_body_size = Some(raw_size);
         }
+        self.record_time = None;
         self.head(id)
     }
 
