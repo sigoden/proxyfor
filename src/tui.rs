@@ -1,11 +1,12 @@
 use crate::{
     state::State,
     traffic::{Body, Traffic, TrafficHead},
+    utils::*,
 };
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, KeyCode},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -14,7 +15,7 @@ use ratatui::{
     prelude::*,
     style::palette::material::GRAY,
     text::{Line, Span},
-    widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
 };
 use std::{
     io,
@@ -22,11 +23,26 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
-use unicode_width::UnicodeWidthStr;
 
 const TICK_INTERVAL: u64 = 250;
+const MESSAGE_TIMEOUT: u64 = 5000;
 const LARGE_WIDTH: u16 = 100;
 const SELECTED_STYLE: Style = Style::new().bg(GRAY.c800).add_modifier(Modifier::BOLD);
+const EXPORT_ALL_TRAFFICS: &str = "proxyfor_all_traffics";
+
+const COPY_ACTIONS: [(&str, &str); 5] = [
+    ("Copy as Markdown", "markdown"),
+    ("Copy as cURL", "curl"),
+    ("Copy as HAR", "har"),
+    ("Copy Request Body", "req-body"),
+    ("Copy Response Body", "res-body"),
+];
+
+const EXPORT_ACTIONS: [(&str, &str); 3] = [
+    ("Export all as Markdown", "markdown"),
+    ("Export all as cURL", "curl"),
+    ("Export all as HAR", "har"),
+];
 
 pub async fn run(state: Arc<State>, addr: &str) -> Result<()> {
     let state_cloned = state.clone();
@@ -65,6 +81,9 @@ struct App {
     current_tab_index: usize,
     current_tab_content_scroll_offset: u16,
     current_tab_content_scroll_size: Option<u16>,
+    current_popup: Option<Popup>,
+    current_notifier: Option<Notifier>,
+    step: u64,
     should_quit: bool,
 }
 
@@ -81,6 +100,9 @@ impl App {
             current_tab_index: 0,
             current_tab_content_scroll_offset: 0,
             current_tab_content_scroll_size: None,
+            current_popup: None,
+            current_notifier: None,
+            step: 0,
             should_quit: false,
         }
     }
@@ -105,13 +127,17 @@ impl App {
 
             self.handle_events(timeout)?;
 
+            if self.should_quit {
+                break;
+            }
+
             if last_tick.elapsed() >= tick_rate {
                 last_tick = Instant::now();
             }
 
-            if self.should_quit {
-                break;
-            }
+            self.maybe_clear_notifier();
+
+            self.step += 1;
         }
         Ok(())
     }
@@ -126,7 +152,6 @@ impl App {
         let Some(traffic_id) = self.selected_traffic().map(|v| v.id) else {
             return;
         };
-        self.current_traffic = None;
         let state = self.state.clone();
         let message_tx = self.message_tx.clone();
         tokio::spawn(async move {
@@ -138,6 +163,74 @@ impl App {
                 traffic, req_body, res_body,
             ))));
         });
+        self.current_traffic = None;
+    }
+
+    fn run_copy_command(&mut self, idx: usize) {
+        let Some(traffic_id) = self.selected_traffic().map(|v| v.id) else {
+            return;
+        };
+        let Some((_, format)) = COPY_ACTIONS.get(idx) else {
+            return;
+        };
+        let state = self.state.clone();
+        let message_tx = self.message_tx.clone();
+        tokio::spawn(async move {
+            match state.export_traffic(traffic_id, format).await {
+                Ok((data, _)) => {
+                    let message = match set_text(&data) {
+                        Ok(_) => Message::Info("Copied".into()),
+                        Err(err) => Message::Error(err.to_string()),
+                    };
+                    let _ = message_tx.send(message);
+                }
+                Err(err) => {
+                    let _ = message_tx.send(Message::Error(err.to_string()));
+                }
+            };
+        });
+    }
+
+    fn run_export_command(&mut self, idx: usize) {
+        let Some((_, format)) = EXPORT_ACTIONS.get(idx) else {
+            return;
+        };
+        let state = self.state.clone();
+        let message_tx = self.message_tx.clone();
+        tokio::spawn(async move {
+            match state.export_all_traffics(format).await {
+                Ok((data, _)) => {
+                    let ext = match *format {
+                        "markdown" => ".md",
+                        "curl" => ".sh",
+                        "har" => ".har",
+                        _ => ".txt",
+                    };
+                    let path = std::env::temp_dir().join(format!("{EXPORT_ALL_TRAFFICS}{ext}"));
+                    let message = match tokio::fs::write(&path, data).await {
+                        Ok(_) => Message::Info(format!("Exported to '{}'", path.display())),
+                        Err(err) => Message::Error(err.to_string()),
+                    };
+                    let _ = message_tx.send(message);
+                }
+                Err(err) => {
+                    let _ = message_tx.send(Message::Error(err.to_string()));
+                }
+            };
+        });
+    }
+
+    fn notify(&mut self, message: &str, is_error: bool) {
+        let step = MESSAGE_TIMEOUT / TICK_INTERVAL;
+        self.current_notifier = Some((message.to_string(), is_error, self.step + step));
+    }
+
+    fn maybe_clear_notifier(&mut self) {
+        if let Some((_, _, timeout_step)) = &self.current_notifier {
+            if self.step > *timeout_step {
+                self.current_notifier = None;
+            }
+        }
     }
 
     fn handle_message(&mut self, message: Message) {
@@ -159,18 +252,22 @@ impl App {
                 }
             }
             Message::TrafficDetails(details) => self.current_traffic = Some(details),
+            Message::Error(error) => self.notify(&error, true),
+            Message::Info(info) => self.notify(&info, false),
         }
     }
 
     fn handle_events(&mut self, timeout: Duration) -> Result<()> {
         if crossterm::event::poll(timeout)? {
-            if let Event::Key(key) = event::read()? {
+            if let event::Event::Key(key) = event::read()? {
                 if key.kind != event::KeyEventKind::Press {
                     return Ok(());
                 }
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
-                        if self.current_view == View::Details {
+                        if self.current_popup.is_some() {
+                            self.current_popup = None;
+                        } else if self.current_view == View::Details {
                             self.current_traffic = None;
                             self.current_view = View::Main;
                         } else {
@@ -178,15 +275,18 @@ impl App {
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if self.current_view == View::Main {
-                            let i = match self.traffic_table_state.selected() {
-                                Some(i) => {
-                                    if i >= self.traffic_heads.len() - 1 {
-                                        0
-                                    } else {
-                                        i + 1
-                                    }
+                        if let Some(popup) = self.current_popup.as_mut() {
+                            match popup {
+                                Popup::Copy(idx) => {
+                                    *idx = next_idx(COPY_ACTIONS.len(), *idx);
                                 }
+                                Popup::Export(idx) => {
+                                    *idx = next_idx(EXPORT_ACTIONS.len(), *idx);
+                                }
+                            }
+                        } else if self.current_view == View::Main {
+                            let i = match self.traffic_table_state.selected() {
+                                Some(i) => next_idx(self.traffic_heads.len(), i),
                                 None => 0,
                             };
                             self.traffic_table_state.select(Some(i));
@@ -203,15 +303,18 @@ impl App {
                         }
                     }
                     KeyCode::Up | KeyCode::Char('k') => {
-                        if self.current_view == View::Main {
-                            let i = match self.traffic_table_state.selected() {
-                                Some(i) => {
-                                    if i == 0 {
-                                        self.traffic_heads.len() - 1
-                                    } else {
-                                        i - 1
-                                    }
+                        if let Some(popup) = self.current_popup.as_mut() {
+                            match popup {
+                                Popup::Copy(idx) => {
+                                    *idx = prev_idx(COPY_ACTIONS.len(), *idx);
                                 }
+                                Popup::Export(idx) => {
+                                    *idx = prev_idx(EXPORT_ACTIONS.len(), *idx);
+                                }
+                            }
+                        } else if self.current_view == View::Main {
+                            let i = match self.traffic_table_state.selected() {
+                                Some(i) => prev_idx(self.traffic_heads.len(), i),
                                 None => 0,
                             };
                             self.traffic_table_state.select(Some(i));
@@ -224,7 +327,13 @@ impl App {
                         }
                     }
                     KeyCode::Enter => {
-                        if self.current_view == View::Main
+                        if let Some(popup) = &self.current_popup {
+                            match popup {
+                                Popup::Copy(idx) => self.run_copy_command(*idx),
+                                Popup::Export(idx) => self.run_export_command(*idx),
+                            }
+                            self.current_popup = None;
+                        } else if self.current_view == View::Main
                             && self.traffic_table_state.selected().is_some()
                         {
                             self.current_view = View::Details;
@@ -233,7 +342,7 @@ impl App {
                             self.sync_current_traffic();
                         }
                     }
-                    KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                    KeyCode::Tab => {
                         if self.current_view == View::Details {
                             if self.current_tab_index == 0 {
                                 self.current_tab_index = 1;
@@ -242,6 +351,24 @@ impl App {
                             }
                             self.current_tab_content_scroll_offset = 0;
                             self.current_tab_content_scroll_size = None;
+                        }
+                    }
+                    KeyCode::Char('c') => {
+                        if self.current_popup.is_none() {
+                            if self.selected_traffic().is_none() {
+                                self.notify("No traffic selected", true);
+                            } else {
+                                self.current_popup = Some(Popup::Copy(0));
+                            }
+                        }
+                    }
+                    KeyCode::Char('e') => {
+                        if self.current_popup.is_none() {
+                            if self.traffic_heads.is_empty() {
+                                self.notify("No traffics", true);
+                            } else {
+                                self.current_popup = Some(Popup::Export(0));
+                            }
                         }
                     }
                     _ => {}
@@ -259,6 +386,7 @@ impl App {
             View::Details => self.render_details_view(frame, chunks[0]),
         }
         self.render_footer(frame, chunks[1]);
+        self.render_popup(frame);
     }
 
     fn render_main_view(&mut self, frame: &mut Frame, area: Rect) {
@@ -400,14 +528,65 @@ impl App {
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
+        match &self.current_notifier {
+            Some(notifier) => self.render_notifier(frame, area, notifier),
+            None => self.render_help_banner(frame, area),
+        }
+    }
+
+    fn render_notifier(&self, frame: &mut Frame, area: Rect, (message, is_error, _): &Notifier) {
+        let (message, style) = if *is_error {
+            (format!("Error: {message}"), Style::new().fg(Color::Red))
+        } else {
+            (format!("✓ {message}"), Style::new().fg(Color::Green))
+        };
+        let text = Text::from(message).style(style);
+        frame.render_widget(Paragraph::new(text), area);
+    }
+
+    fn render_help_banner(&self, frame: &mut Frame, area: Rect) {
         let text = match self.current_view {
-            View::Main => "q: Quit | ↵ Select | ⇅ Navigate".to_string(),
-            View::Details => "q: Back | ↹ Switch | ⇅ Scroll".to_string(),
+            View::Main => "↵ Select | ⇅ Navigate | c: Copy | e: Export | q: Quit".to_string(),
+            View::Details => "Tab: Switch | ⇅ Scroll | c: Copy | e: Export | q: Back".to_string(),
         };
         frame.render_widget(
             Paragraph::new(Text::from(text).style(Style::new().dim())),
             area,
         );
+    }
+
+    fn render_popup(&self, frame: &mut Frame) {
+        match &self.current_popup {
+            Some(Popup::Copy(idx)) => self.render_action_popup(frame, *idx, &COPY_ACTIONS, 24),
+            Some(Popup::Export(idx)) => self.render_action_popup(frame, *idx, &EXPORT_ACTIONS, 30),
+            None => {}
+        }
+    }
+
+    fn render_action_popup(
+        &self,
+        frame: &mut Frame,
+        idx: usize,
+        actions: &[(&str, &str)],
+        width: u16,
+    ) {
+        let block = Block::bordered().title("Actions");
+        let texts = actions
+            .iter()
+            .enumerate()
+            .map(|(i, (v, _))| {
+                let style = if i == idx {
+                    SELECTED_STYLE
+                } else {
+                    Style::default()
+                };
+                Line::raw(v.to_string()).style(style)
+            })
+            .collect::<Vec<Line>>();
+        let paragraph = Paragraph::new(texts).block(block);
+        let area = popup_absolute_area(frame.area(), width, actions.len() as u16 + 2);
+        frame.render_widget(Clear, area);
+        frame.render_widget(paragraph, area);
     }
 }
 
@@ -431,7 +610,33 @@ fn generate_title(head: &TrafficHead, width: u16) -> String {
     head_text
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+fn popup_absolute_area(area: Rect, width: u16, height: u16) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(
+            [
+                Constraint::Length(area.height.saturating_sub(height) / 2),
+                Constraint::Length(height),
+                Constraint::Min(0),
+            ]
+            .as_ref(),
+        )
+        .split(area);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(
+            [
+                Constraint::Length(area.width.saturating_sub(width) / 2),
+                Constraint::Length(width),
+                Constraint::Min(0),
+            ]
+            .as_ref(),
+        )
+        .split(popup_layout[1])[1]
+}
+
+#[derive(Debug, Clone, PartialEq)]
 enum View {
     Main,
     Details,
@@ -441,78 +646,16 @@ enum View {
 enum Message {
     TrafficHead(TrafficHead),
     TrafficDetails(Box<TrafficDetails>),
+    Info(String),
+    Error(String),
 }
 
 type TrafficDetails = (Traffic, Option<Body>, Option<Body>);
 
-fn ellipsis_tail(text: &str, width: u16) -> String {
-    let width = width as _;
-    let text_width = text.width();
-    if text_width > width {
-        format!("{}…", &text[..width - 1])
-    } else {
-        text.to_string()
-    }
-}
+type Notifier = (String, bool, u64); // (message, is_error, timeout_step)
 
-fn ellipsis_head(text: &str, width: u16) -> String {
-    let width = width as _;
-    let text_width = text.width();
-    if text_width > width {
-        format!("…{}", &text[text_width - width + 1..])
-    } else {
-        text.to_string()
-    }
-}
-
-fn format_size(bytes: Option<u64>) -> String {
-    match bytes {
-        None => String::new(),
-        Some(0) => "0".to_string(),
-        Some(bytes) => {
-            let prefix = ["b", "kb", "mb", "gb", "tb"];
-            let mut i = 0;
-            while i < prefix.len() && 1024u64.pow(i as u32 + 1) <= bytes {
-                i += 1;
-            }
-            let precision = if bytes % 1024u64.pow(i as u32) == 0 {
-                0
-            } else {
-                1
-            };
-            format!(
-                "{:.prec$}{}",
-                bytes as f64 / 1024f64.powi(i as i32),
-                prefix[i],
-                prec = precision
-            )
-        }
-    }
-}
-
-fn format_time_delta(delta: Option<u64>) -> String {
-    let mut delta = match delta {
-        Some(ms) => ms,
-        None => return String::from(""),
-    };
-
-    if delta == 0 {
-        return String::from("0");
-    }
-
-    if delta > 1000 && delta < 10000 {
-        let seconds = delta as f64 / 1000.0;
-        return format!("{:.2}s", seconds);
-    }
-
-    let prefix = ["ms", "s", "min", "h"];
-    let div = [1000, 60, 60];
-    let mut i = 0;
-
-    while i < div.len() && delta >= div[i] {
-        delta /= div[i];
-        i += 1;
-    }
-
-    format!("{}{}", delta, prefix[i])
+#[derive(Debug, Clone, PartialEq)]
+enum Popup {
+    Copy(usize),
+    Export(usize),
 }

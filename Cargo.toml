@@ -50,6 +50,13 @@ simplelog = "0.12.2"
 flate2 = "1.0.34"
 brotli = "6.0.0"
 zstd = "0.13.2"
+shell-words = "1.1.0"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = { version = "3.3.0", default-features = false, features = ["wayland-data-control"] }
+
+[target.'cfg(not(any(target_os = "linux", target_os = "android", target_os = "emscripten")))'.dependencies]
+arboard = { version = "3.3.0", default-features = false }
 
 [dev-dependencies]
 async-compression = { version = "0.4.12", features = ["gzip", "tokio"] }

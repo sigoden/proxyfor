@@ -1,7 +1,9 @@
+use crate::utils::*;
+
 use anyhow::{bail, Result};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{HeaderMap, StatusCode, Version};
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     path::Path,
@@ -185,15 +187,11 @@ impl Traffic {
                 escape_single_quote(&header.value)
             ))
         }
-        if let Some(body) = req_body {
+        if let (Some(body), Some(body_file)) = (req_body, &self.req_body_file) {
             if body.is_utf8() {
-                output.push_str(&format!(" \\\n  -d '{}'", escape_single_quote(&body.value)))
+                output.push_str(&format!(" \\\n  -d {}", shell_words::quote(&body.value)));
             } else {
-                output.push_str(" \\\n  --data-binary @-");
-                output = format!(
-                    "echo {} | \\\n  base64 --decode | \\\n  {}",
-                    body.value, output
-                );
+                output.push_str(&format!(" \\\n  -t {}", shell_words::quote(body_file)));
             }
         }
         output
@@ -215,6 +213,24 @@ impl Traffic {
                 "application/json; charset=UTF-8",
             )),
             "curl" => Ok((self.curl().await, "text/plain; charset=UTF-8")),
+            "req-body" | "res-body" => {
+                let body_info = match format {
+                    "req-body" => (Body::read(&self.req_body_file).await, &self.req_body_file),
+                    "res-body" => (Body::read(&self.res_body_file).await, &self.res_body_file),
+                    _ => unreachable!(),
+                };
+                match body_info {
+                    (Some(body), Some(body_file)) => {
+                        let data = if body.is_utf8() {
+                            &body.value
+                        } else {
+                            body_file
+                        };
+                        Ok((data.clone(), "text/plain; charset=UTF-8"))
+                    }
+                    _ => bail!("No {format} data"),
+                }
+            }
             "" => Ok((
                 serde_json::to_string_pretty(&self.json().await)?,
                 "application/json; charset=UTF-8",
@@ -567,104 +583,6 @@ fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a s
     })
 }
 
-pub(crate) fn to_ext_name(mime: &str) -> &str {
-    match mime {
-        "audio/aac" => ".aac",
-        "application/x-abiword" => ".abw",
-        "image/apng" => ".apng",
-        "application/x-freearc" => ".arc",
-        "image/avif" => ".avif",
-        "video/x-msvideo" => ".avi",
-        "application/vnd.amazon.ebook" => ".azw",
-        "application/octet-stream" => ".bin",
-        "image/bmp" => ".bmp",
-        "application/x-bzip" => ".bz",
-        "application/x-bzip2" => ".bz2",
-        "application/x-cdf" => ".cda",
-        "application/x-csh" => ".csh",
-        "text/css" => ".css",
-        "text/csv" => ".csv",
-        "application/msword" => ".doc",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => ".docx",
-        "application/vnd.ms-fontobject" => ".eot",
-        "application/epub+zip" => ".epub",
-        "application/gzip" | "application/x-gzip" => ".gz",
-        "image/gif" => ".gif",
-        "text/html" | "text/htm" => ".html",
-        "image/vnd.microsoft.icon" => ".ico",
-        "text/calendar" => ".ics",
-        "application/java-archive" => ".jar",
-        "image/jpeg" => ".jpeg",
-        "text/javascript" => ".js",
-        "application/json" => ".json",
-        "application/ld+json" => ".jsonld",
-        "audio/midi" | "audio/x-midi" => ".mid",
-        "audio/mpeg" => ".mp3",
-        "video/mp4" => ".mp4",
-        "video/mpeg" => ".mpeg",
-        "application/vnd.apple.installer+xml" => ".mpkg",
-        "application/vnd.oasis.opendocument.presentation" => ".odp",
-        "application/vnd.oasis.opendocument.spreadsheet" => ".ods",
-        "application/vnd.oasis.opendocument.text" => ".odt",
-        "audio/ogg" => ".oga",
-        "video/ogg" => ".ogv",
-        "application/ogg" => ".ogx",
-        "font/otf" => ".otf",
-        "image/png" => ".png",
-        "application/pdf" => ".pdf",
-        "application/x-httpd-php" => ".php",
-        "application/vnd.ms-powerpoint" => ".ppt",
-        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => ".pptx",
-        "application/vnd.rar" => ".rar",
-        "application/rtf" => ".rtf",
-        "application/x-sh" => ".sh",
-        "image/svg+xml" => ".svg",
-        "application/x-tar" => ".tar",
-        "image/tiff" => ".tif",
-        "video/mp2t" => ".ts",
-        "font/ttf" => ".ttf",
-        "text/plain" => ".txt",
-        "application/vnd.visio" => ".vsd",
-        "audio/wav" => ".wav",
-        "audio/webm" => ".weba",
-        "video/webm" => ".webm",
-        "image/webp" => ".webp",
-        "font/woff" => ".woff",
-        "font/woff2" => ".woff2",
-        "application/xhtml+xml" => ".xhtml",
-        "application/vnd.ms-excel" => ".xls",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => ".xlsx",
-        "application/xml" | "text/xml" => ".xml",
-        "application/vnd.mozilla.xul+xml" => ".xul",
-        "application/zip" | "x-zip-compressed" => ".zip",
-        "video/3gpp" | "audio/3gpp" => ".3gp",
-        "video/3gpp2" | "audio/3gpp2" => ".3g2",
-        "application/x-7z-compressed" => ".7z",
-        _ => {
-            if mime.starts_with("text/") {
-                ".txt"
-            } else {
-                ""
-            }
-        }
-    }
-}
-
-pub(crate) fn to_md_lang(mime: &str) -> &str {
-    if let Some(value) = mime
-        .strip_prefix("text/")
-        .or_else(|| mime.strip_prefix("application/"))
-    {
-        if let Some(value) = value.strip_prefix("x-") {
-            value
-        } else {
-            value
-        }
-    } else {
-        ""
-    }
-}
-
 pub(crate) fn wrap_entries(entries: Vec<Value>) -> Value {
     json!({
         "log": {
@@ -678,27 +596,6 @@ pub(crate) fn wrap_entries(entries: Vec<Value>) -> Value {
             "entries": entries,
         }
     })
-}
-
-pub(crate) fn serialize_datetime<S>(date: &OffsetDateTime, serializer: S) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    let formatted = date.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
-    serializer.serialize_str(&formatted)
-}
-
-pub(crate) fn serialize_option_datetime<S>(
-    date: &Option<OffsetDateTime>,
-    serializer: S,
-) -> Result<S::Ok, S::Error>
-where
-    S: Serializer,
-{
-    match date {
-        Some(date) => serialize_datetime(date, serializer),
-        None => serializer.serialize_none(),
-    }
 }
 
 fn map_headers(headers: &HeaderMap) -> Vec<Header> {
@@ -755,15 +652,5 @@ mod tests {
 
 [BINARY DATA](/tmp/proxyfor-666/1-res)"#;
         assert_eq!(output, expect);
-    }
-
-    #[test]
-    fn test_md_lang() {
-        assert_eq!(to_md_lang("application/json"), "json");
-        assert_eq!(to_md_lang("application/xml"), "xml");
-        assert_eq!(to_md_lang("application/octet-stream"), "octet-stream");
-        assert_eq!(to_md_lang("application/javascript"), "javascript");
-        assert_eq!(to_md_lang("text/x-rust"), "rust");
-        assert_eq!(to_md_lang("text/css"), "css");
     }
 }

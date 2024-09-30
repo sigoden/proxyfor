@@ -3,7 +3,7 @@ use crate::{
     traffic::{wrap_entries, Body, Traffic, TrafficHead},
 };
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_json::Value;
@@ -81,7 +81,15 @@ impl State {
             .collect()
     }
 
-    pub async fn export_traffics(&self, format: &str) -> Result<(String, &'static str)> {
+    pub async fn export_traffic(&self, id: usize, format: &str) -> Result<(String, &'static str)> {
+        let traffic = self
+            .get_traffic(id)
+            .await
+            .ok_or_else(|| anyhow!("Not found traffic {id}"))?;
+        traffic.export(format).await
+    }
+
+    pub async fn export_all_traffics(&self, format: &str) -> Result<(String, &'static str)> {
         let traffics = self.traffics.lock().await;
         match format {
             "markdown" => {
@@ -195,7 +203,7 @@ pub enum WebsocketMessage {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WebsocketData {
-    #[serde(serialize_with = "crate::traffic::serialize_datetime")]
+    #[serde(serialize_with = "crate::utils::serialize_datetime")]
     create: OffsetDateTime,
     server_to_client: bool,
     body: Body,
