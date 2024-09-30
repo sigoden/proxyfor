@@ -50,7 +50,8 @@ impl State {
             return;
         };
 
-        let head = traffic.done_res_body(*id, raw_size);
+        traffic.done_res_body(raw_size);
+        let head = traffic.head(*id);
         let _ = self.traffics_notifier.send(head);
         match self.print_mode {
             PrintMode::Nothing => {}
