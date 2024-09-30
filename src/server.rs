@@ -3,7 +3,8 @@ use crate::{
     filter::{is_match_title, is_match_type, TitleFilter},
     rewind::Rewind,
     state::State,
-    traffic::{extract_mime, to_ext_name, Traffic},
+    traffic::{extract_mime, Traffic},
+    utils::*,
 };
 
 use anyhow::{anyhow, Context as _, Result};
@@ -35,7 +36,7 @@ use pin_project_lite::pin_project;
 use serde::Serialize;
 use std::{
     fs::File,
-    io::{Read, Write},
+    io::Write,
     path::PathBuf,
     pin::Pin,
     process,
@@ -390,35 +391,28 @@ impl Server {
         Ok(())
     }
 
-    async fn handle_list_traffics(&self, res: &mut Response, query: &str) -> Result<()> {
-        let (data, mime) = self.state.export_traffics(query).await?;
+    async fn handle_list_traffics(&self, res: &mut Response, format: &str) -> Result<()> {
+        let (data, content_type) = self.state.export_all_traffics(format).await?;
         set_res_body(res, data);
         res.headers_mut()
-            .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
+            .insert(CONTENT_TYPE, HeaderValue::from_str(content_type)?);
         res.headers_mut()
             .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         Ok(())
     }
 
-    async fn handle_get_traffic(&self, res: &mut Response, id: &str, query: &str) -> Result<()> {
+    async fn handle_get_traffic(&self, res: &mut Response, id: &str, format: &str) -> Result<()> {
         let Ok(id) = id.parse() else {
             *res.status_mut() = StatusCode::BAD_REQUEST;
             set_res_body(res, "Invalid id");
             return Ok(());
         };
-        match self.state.get_traffic(id).await {
-            Some(traffic) => {
-                let (data, mime) = traffic.export(query).await?;
-                set_res_body(res, data);
-                res.headers_mut()
-                    .insert(CONTENT_TYPE, HeaderValue::from_str(mime)?);
-                res.headers_mut()
-                    .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-            }
-            None => {
-                *res.status_mut() = StatusCode::NOT_FOUND;
-            }
-        }
+        let (data, content_type) = self.state.export_traffic(id, format).await?;
+        set_res_body(res, data);
+        res.headers_mut()
+            .insert(CONTENT_TYPE, HeaderValue::from_str(content_type)?);
+        res.headers_mut()
+            .insert(CACHE_CONTROL, HeaderValue::from_static("no-cache"));
         Ok(())
     }
 
@@ -993,34 +987,4 @@ fn ignore_tungstenite_error(err: &tungstenite::Error) -> bool {
                 tungstenite::error::ProtocolError::ResetWithoutClosingHandshake
             )
     )
-}
-
-fn decompress(data: &[u8], encoding: &str) -> Result<Vec<u8>> {
-    match encoding {
-        "gzip" => {
-            let mut decoder = flate2::read::GzDecoder::new(data);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "deflate" => {
-            let mut decoder = flate2::read::DeflateDecoder::new(data);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "br" => {
-            let mut decoder = brotli::Decompressor::new(data, 4096);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "zstd" => {
-            let mut decoder = zstd::stream::Decoder::new(data)?;
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        _ => Ok(data.to_vec()),
-    }
 }
