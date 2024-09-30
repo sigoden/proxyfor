@@ -168,8 +168,8 @@ impl Server {
             }
         });
         tokio::spawn(async move {
-            while let Some((id, raw_size)) = traffic_done_rx.recv().await {
-                self.state.done_traffic(id, raw_size).await;
+            while let Some((gid, raw_size)) = traffic_done_rx.recv().await {
+                self.state.done_traffic(gid, raw_size).await;
             }
         });
         Ok(stop_tx)
@@ -274,10 +274,7 @@ impl Server {
                 .await;
         }
 
-        let mut builder = hyper::Request::builder()
-            .uri(&uri)
-            .method(method.clone())
-            .version(req_version);
+        let mut builder = hyper::Request::builder().uri(&uri).method(method.clone());
 
         for (key, value) in req.headers().iter() {
             if matches!(key, &HOST | &CONNECTION | &PROXY_AUTHORIZATION) {
@@ -306,7 +303,7 @@ impl Server {
             }
         };
 
-        traffic.start_record_time();
+        traffic.set_start_time();
         let builder = Client::builder(TokioExecutor::new());
         let proxy_res = if uri.starts_with("https://") {
             builder
@@ -507,7 +504,7 @@ impl Server {
             hyper::Request::from_parts(parts, ())
         };
 
-        traffic.start_record_time();
+        traffic.set_start_time();
         match hyper_tungstenite::upgrade(&mut req, None) {
             Ok((proxy_res, websocket)) => {
                 let id = self.state.new_websocket().await;
@@ -903,8 +900,8 @@ pin_project! {
     }
     impl<B> PinnedDrop for BodyWrapper<B> {
         fn drop(this: Pin<&mut Self>) {
-            if let Some((id, traffic_done_tx)) = this.traffic_done.as_ref() {
-                let _ = traffic_done_tx.send((*id, this.raw_size));
+            if let Some((gid, traffic_done_tx)) = this.traffic_done.as_ref() {
+                let _ = traffic_done_tx.send((*gid, this.raw_size));
             }
         }
      }

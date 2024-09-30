@@ -8,8 +8,7 @@ expression: output
   "gid":<GID>,
   "uri": "http://localhost:<PORT>/echo",
   "method": "POST",
-  "start": "<DATETIME>",
-  "time":<TIME>,
+  "start_time": "<DATETIME>",
   "req_version": "HTTP/1.1",
   "req_headers": {
     "items": [
@@ -54,6 +53,7 @@ expression: output
   },
   "res_body_file":"<BODY_FILE>",
   "res_body_size": 13,
+  "end_time": "<DATETIME>",
   "websocket_id": null,
   "error": null,
   "req_body": {

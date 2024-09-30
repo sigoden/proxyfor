@@ -264,13 +264,13 @@ impl App {
     fn render_main_view(&mut self, frame: &mut Frame, area: Rect) {
         let block = Block::bordered().title(format!("Proxyfor ({})", self.addr));
         if area.width > LARGE_WIDTH {
-            let method_width = 8;
-            let status_width = 4;
-            let mime_width = 17;
-            let size_width = 8;
-            let time_delta_width = 6;
+            let method_width = 7;
+            let status_width = 3;
+            let mime_width = 16;
+            let size_width = 7;
+            let time_delta_width = 5;
             let uri_width = area.width
-                - 4
+                - 9 // 2(borders)+2(smybol)+6(columns)-1
                 - method_width
                 - status_width
                 - mime_width
@@ -278,10 +278,10 @@ impl App {
                 - time_delta_width;
 
             let rows = self.traffic_heads.iter().map(|head| {
-                let uri = ellipsis_tail(&head.uri, uri_width - 1);
-                let method = ellipsis_tail(&head.method, method_width - 1);
+                let uri = ellipsis_tail(&head.uri, uri_width);
+                let method = ellipsis_tail(&head.method, method_width);
                 let status = head.status.map(|v| v.to_string()).unwrap_or_default();
-                let mime = ellipsis_head(&head.mime.clone(), mime_width - 1);
+                let mime = ellipsis_head(&head.mime.clone(), mime_width);
                 let size = format_size(head.size.map(|v| v as _));
                 let time_delta = format_time_delta(head.time.map(|v| v as _));
                 [
@@ -449,7 +449,7 @@ fn ellipsis_tail(text: &str, width: u16) -> String {
     let width = width as _;
     let text_width = text.width();
     if text_width > width {
-        format!("{}…", &text[..text_width - 1])
+        format!("{}…", &text[..width - 1])
     } else {
         text.to_string()
     }

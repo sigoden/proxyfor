@@ -6,7 +6,6 @@ use serde_json::{json, Value};
 use std::{
     path::Path,
     sync::atomic::{self, AtomicUsize},
-    time::Instant,
 };
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
@@ -17,11 +16,8 @@ pub struct Traffic {
     pub gid: usize,
     pub uri: String,
     pub method: String,
-    #[serde(serialize_with = "serialize_datetime")]
-    pub start: OffsetDateTime,
-    #[serde(skip)]
-    pub record_time: Option<Instant>,
-    pub time: Option<usize>,
+    #[serde(serialize_with = "serialize_option_datetime")]
+    pub start_time: Option<OffsetDateTime>,
     pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
     pub req_body_file: Option<String>,
@@ -30,6 +26,8 @@ pub struct Traffic {
     pub res_headers: Option<Headers>,
     pub res_body_file: Option<String>,
     pub res_body_size: Option<u64>,
+    #[serde(serialize_with = "serialize_option_datetime")]
+    pub end_time: Option<OffsetDateTime>,
     pub websocket_id: Option<usize>,
     pub error: Option<String>,
     #[serde(skip)]
@@ -42,9 +40,7 @@ impl Traffic {
             gid: GLOBAL_ID.fetch_add(1, atomic::Ordering::Relaxed),
             uri: uri.to_string(),
             method: method.to_string(),
-            start: OffsetDateTime::now_utc(),
-            record_time: None,
-            time: None,
+            start_time: None,
             req_version: None,
             req_headers: None,
             req_body_file: None,
@@ -53,6 +49,7 @@ impl Traffic {
             res_headers: None,
             res_body_file: None,
             res_body_size: None,
+            end_time: None,
             websocket_id: None,
             error: None,
             valid: true,
@@ -153,8 +150,8 @@ impl Traffic {
             "bodySize": har_size(self.res_body_size, -1),
         });
         Some(json!({
-            "startedDateTime": self.start.format(&Rfc3339).unwrap_or_default(),
-            "time": self.time.map(|v| v as isize).unwrap_or(-1),
+            "startedDateTime": self.start_time.as_ref().and_then(|v| v.format(&Rfc3339).ok()),
+            "time": self.time().map(|v| v as isize).unwrap_or(-1),
             "request": request,
             "response": response,
             "cache": {},
@@ -235,8 +232,18 @@ impl Traffic {
             uri: self.uri.clone(),
             status: self.status,
             size: self.res_body_size,
-            time: self.time,
+            time: self.time(),
             mime: extract_mime(&self.res_headers).to_string(),
+        }
+    }
+
+    pub(crate) fn time(&self) -> Option<u64> {
+        match (self.end_time, self.start_time) {
+            (Some(end_time), Some(start_time)) => {
+                let duration = end_time - start_time;
+                Some(duration.whole_milliseconds() as u64)
+            }
+            _ => None,
         }
     }
 
@@ -285,22 +292,18 @@ impl Traffic {
         self
     }
 
-    pub(crate) fn start_record_time(&mut self) {
-        self.record_time = Some(Instant::now());
+    pub(crate) fn set_start_time(&mut self) {
+        self.start_time = Some(OffsetDateTime::now_utc());
     }
 
-    pub(crate) fn done_res_body(&mut self, id: usize, raw_size: u64) -> TrafficHead {
+    pub(crate) fn done_res_body(&mut self, raw_size: u64) {
         if raw_size == 0 {
             self.res_body_file = None;
         }
         if self.error.is_none() {
-            if let Some(instant) = self.record_time.take() {
-                self.time = Some(instant.elapsed().as_millis() as usize);
-            }
+            self.end_time = Some(OffsetDateTime::now_utc());
             self.res_body_size = Some(raw_size);
         }
-        self.record_time = None;
-        self.head(id)
     }
 
     pub(crate) async fn bodies(&self) -> (Option<Body>, Option<Body>) {
@@ -318,7 +321,7 @@ pub struct TrafficHead {
     pub uri: String,
     pub status: Option<u16>,
     pub size: Option<u64>,
-    pub time: Option<usize>,
+    pub time: Option<u64>,
     pub mime: String,
 }
 
@@ -690,6 +693,19 @@ where
 {
     let formatted = date.format(&Rfc3339).map_err(serde::ser::Error::custom)?;
     serializer.serialize_str(&formatted)
+}
+
+pub(crate) fn serialize_option_datetime<S>(
+    date: &Option<OffsetDateTime>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    match date {
+        Some(date) => serialize_datetime(date, serializer),
+        None => serializer.serialize_none(),
+    }
 }
 
 fn map_headers(headers: &HeaderMap) -> Vec<Header> {

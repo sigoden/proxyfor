@@ -1016,8 +1016,8 @@
         }
 
         function formatSize(len) {
-            if (len === null) return "";
             if (len === 0) return "0";
+            if (!len) return "";
             const prefix = ["b", "kb", "mb", "gb", "tb"];
             let i = 0;
             for (; i < prefix.length; i++) {
@@ -1032,8 +1032,8 @@
         }
 
         function formatTimeDelta(delta) {
-            if (delta === null) return "";
             if (delta === 0) return "0";
+            if (!delta) return "";
             if (delta > 1000 && delta < 10000) {
                 return (delta / 1000.0).toFixed(2) + "s";
             }
