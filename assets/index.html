@@ -348,12 +348,11 @@
          * @typedef {Object} Traffic
          * @property {string} uri
          * @property {string} method
-         * @property {?string} req_version
          * @property {?HeadersData} req_headers
          * @property {?BodyData} req_body
          * @property {?number} status
+         * @property {?string} http_version
          * @property {?HeadersData} res_headers
-         * @property {?string} res_version
          * @property {?BodyData} res_body
          * @property {?number} websocket_id
          * @property {?string} error
@@ -817,7 +816,7 @@
          */
         function tmplTrafficReq(traffic) {
             return [
-                `<div class="firstline">${traffic.method} ${traffic.uri} ${traffic.req_version || ""}</div>`,
+                `<div class="firstline">${traffic.method} ${traffic.uri} ${traffic.http_version || ""}</div>`,
                 tmplHeaders(traffic.req_headers),
                 tmplBody(traffic.req_body, traffic.req_headers),
             ].join("");
@@ -828,7 +827,7 @@
          */
         function tmplTrafficRes(traffic) {
             return [
-                `<div class="firstline">${[traffic.res_version || "", traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
+                `<div class="firstline">${[traffic.http_version || "", traffic.status, STATUS_CODES[traffic.status]].join(" ")}</div>`,
                 tmplHeaders(traffic.res_headers),
                 tmplBody(traffic.res_body, traffic.res_headers),
             ].join("");

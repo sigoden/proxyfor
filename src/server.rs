@@ -252,9 +252,6 @@ impl Server {
 
         let mut traffic = Traffic::new(&req_uri, method.as_str());
 
-        let req_version = req.version();
-        traffic.set_req_version(&req_version);
-
         traffic.check_match(is_match_title(
             &self.title_filters,
             &format!("{method} {uri}"),
@@ -806,7 +803,7 @@ impl Server {
 
         traffic
             .set_res_status(proxy_res_status)
-            .set_res_version(&proxy_res_version)
+            .set_http_version(&proxy_res_version)
             .set_res_headers(&proxy_res_headers);
 
         *res.status_mut() = proxy_res_status;

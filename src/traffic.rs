@@ -16,19 +16,18 @@ pub struct Traffic {
     pub gid: usize,
     pub uri: String,
     pub method: String,
-    #[serde(serialize_with = "serialize_option_datetime")]
-    pub start_time: Option<OffsetDateTime>,
-    pub req_version: Option<String>,
     pub req_headers: Option<Headers>,
     pub req_body_file: Option<String>,
     pub status: Option<u16>,
-    pub res_version: Option<String>,
+    pub http_version: Option<String>,
     pub res_headers: Option<Headers>,
     pub res_body_file: Option<String>,
     pub res_body_size: Option<u64>,
+    pub websocket_id: Option<usize>,
+    #[serde(serialize_with = "serialize_option_datetime")]
+    pub start_time: Option<OffsetDateTime>,
     #[serde(serialize_with = "serialize_option_datetime")]
     pub end_time: Option<OffsetDateTime>,
-    pub websocket_id: Option<usize>,
     pub error: Option<String>,
     #[serde(skip)]
     pub valid: bool,
@@ -40,15 +39,14 @@ impl Traffic {
             gid: GLOBAL_ID.fetch_add(1, atomic::Ordering::Relaxed),
             uri: uri.to_string(),
             method: method.to_string(),
-            start_time: None,
-            req_version: None,
             req_headers: None,
             req_body_file: None,
             status: None,
-            res_version: None,
+            http_version: None,
             res_headers: None,
             res_body_file: None,
             res_body_size: None,
+            start_time: None,
             end_time: None,
             websocket_id: None,
             error: None,
@@ -125,12 +123,12 @@ impl Traffic {
     }
 
     pub async fn har_entry(&self) -> Option<Value> {
-        self.status?;
         let (req_body, res_body) = self.bodies().await;
+        let http_version = self.http_version.clone().unwrap_or_default();
         let request = json!({
             "method": self.method,
             "url": self.uri,
-            "httpVersion": self.req_version,
+            "httpVersion": http_version,
             "cookies": har_req_cookies(&self.req_headers),
             "headers": har_headers(&self.req_headers),
             "queryString": har_query_string(&self.uri),
@@ -141,7 +139,7 @@ impl Traffic {
         let response = json!({
             "status": self.status.unwrap_or_default(),
             "statusText": "",
-            "httpVersion": self.res_version,
+            "httpVersion": http_version,
             "cookies": har_res_cookies(&self.res_headers),
             "headers": har_headers(&self.res_headers),
             "content": har_res_body(&res_body, self.res_body_size.unwrap_or_default(), &self.res_headers),
@@ -247,11 +245,6 @@ impl Traffic {
         }
     }
 
-    pub(crate) fn set_req_version(&mut self, http_version: &Version) -> &mut Self {
-        self.req_version = Some(format!("{http_version:?}"));
-        self
-    }
-
     pub(crate) fn set_req_headers(&mut self, headers: &HeaderMap) -> &mut Self {
         self.req_headers = Some(Headers::new(headers));
         self
@@ -267,8 +260,8 @@ impl Traffic {
         self
     }
 
-    pub(crate) fn set_res_version(&mut self, http_version: &Version) -> &mut Self {
-        self.res_version = Some(format!("{http_version:?}"));
+    pub(crate) fn set_http_version(&mut self, http_version: &Version) -> &mut Self {
+        self.http_version = Some(format!("{http_version:?}"));
         self
     }
 
