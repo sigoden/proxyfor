@@ -3,7 +3,6 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>proxyfor</title>
     <link rel="icon" href="data:,">
     <link rel="stylesheet" href="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/styles/stackoverflow-light.min.css">
@@ -34,35 +33,59 @@
             border-spacing: 0;
         }
 
-        body {
-            display: flex;
-            height: 100vh;
-            padding: 8px;
-            margin: 0;
+        html {
             box-sizing: border-box;
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-            font-size: 14px;
-            line-height: 1.42857143;
-            color: #333;
-            background-color: #fff;
         }
 
         .hidden {
             display: none;
         }
 
-        .left-panel,
-        .right-panel {
+        .root {
             display: flex;
             flex-direction: column;
-            flex: 1;
-            border: 1px solid #ccc;
-            width: 50vh;
+            background-color: #fff;
+            overflow-x: auto;
         }
 
-        .left-panel {
-            overflow-y: auto;
-            overflow-x: hidden;
+        .header {
+            display: flex;
+            align-items: center;
+            background-color: #f2f2f2;
+            border-bottom: 2px solid white;
+        }
+
+        .main {
+            display: flex;
+            height: calc(100vh - 40px);
+            font-size: 14px;
+            color: #333;
+        }
+
+        .searchbar {
+            display: flex;
+            flex-wrap: nowrap;
+            width: 50%;
+            background-color: #fafafa;
+            transition: all .15s;
+            border: 1px #9a9a9a solid;
+        }
+
+        .searchbar #search {
+            box-sizing: border-box;
+            width: 100%;
+            font-size: 16px;
+            padding: 1px;
+            background-color: transparent;
+            border: none;
+            outline: none;
+        }
+
+        .searchbar .icon {
+            color: #9a9a9a;
+            padding: 3px 3px;
+            cursor: pointer;
         }
 
         .tabs {
@@ -85,6 +108,7 @@
 
         .toolbox {
             margin-left: auto;
+            padding-right: 5px;
         }
 
         .dropdown {
@@ -93,9 +117,16 @@
         }
 
         .dropbtn {
-            padding: 8px;
             border: none;
             cursor: pointer;
+            color: black;
+            text-decoration: none;
+            padding: 0 4px;
+            line-height: 2;
+        }
+
+        .toolbox .dropbtn:not(:last-child) {
+            border-right: 1px solid white;
         }
 
         .dropdown-content {
@@ -125,17 +156,14 @@
             background-color: #f5f5f5;
         }
 
-        .certificate {
-            position: relative;
-            display: inline-block;
-            border: none;
-            cursor: pointer;
-            padding-right: 0.5rem;
-        }
-
-        .certificate a {
-            color: #333;
-            text-decoration: none;
+        .left-panel,
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            border: 1px solid #ccc;
+            width: 50%;
+            overflow-x: hidden;
+            overflow-y: auto;
         }
 
         .traffic-table {
@@ -150,15 +178,11 @@
             background-color: #f2f2f2;
             border-bottom: solid #bebebe 1px;
             font-weight: 400;
-            line-height: 23px;
+            line-height: 2.3;
         }
 
         .traffic-table tr {
             line-height: 30px;
-        }
-
-        .traffic-table tr:nth-child(even) {
-            background-color: #f2f2f2;
         }
 
         .traffic-table td {
@@ -287,37 +311,37 @@
         .ws-send {
             color: #337ab7;
         }
+
+        @media (max-width: 1000px) {
+            .col-status,
+            .col-type,
+            .col-size,
+            .col-time {
+                display: none;
+            }
+        }
     </style>
     <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
     <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
 </head>
 
 <body>
-    <div class="left-panel">
-        <table class="traffic-table">
-            <thead>
-                <tr>
-                    <th class="col-uri">Path</th>
-                    <th class="col-method">Method</th>
-                    <th class="col-status">Status</th>
-                    <th class="col-type">Type</th>
-                    <th class="col-size">Size</th>
-                    <th class="col-time">Time</th>
-                </tr>
-            </thead>
-            <tbody>
-            </tbody>
-        </table>
-    </div>
-    <div class="right-panel">
-        <div class="tabs">
-            <div data-tab="req" class="tab active">Request</div>
-            <div data-tab="res" class="tab">Response</div>
-            <div data-tab="ws" class="tab hidden">Websocket</div>
-            <div data-tab="err" class="tab hidden">Error</div>
+    <div class="root">
+        <div class="header">
+            <form class="searchbar">
+                <div class="icon">
+                    <svg width="16" height="16" viewBox="0 0 16 16">
+                        <path
+                            d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z" />
+                    </svg>
+                </div>
+                <input id="search" title="Search traffics" placeholder="Search" type="text" autocomplete="off"
+                    tabindex="1">
+                <input type="submit" hidden />
+            </form>
             <div class="toolbox">
                 <div class="dropdown copy-dropdown">
-                    <button class="dropbtn">Copy▾</button>
+                    <button class="dropbtn" title="Copy the current traffic">Copy▾</button>
                     <div class="dropdown-content">
                         <a data-kind="markdown">Copy as Markdown</a>
                         <a data-kind="curl">Copy as cURL</a>
@@ -327,20 +351,46 @@
                     </div>
                 </div>
                 <div class="dropdown export-dropdown">
-                    <button class="dropbtn">Export▾</button>
+                    <button class="dropbtn" title="Export all traffics">Export▾</button>
                     <div class="dropdown-content">
                         <a data-kind="markdown">Export all as Markdown</a>
                         <a data-kind="curl">Export all as cURL</a>
                         <a data-kind="har">Export all as HAR</a>
                     </div>
                 </div>
-                <div class="certificate">
-                    <a href="/__proxyfor__/certificate/" target="_blank"
-                        title="Install CA certificate for HTTPS Proxy">Certificate</a>
+                <div class="dropdown dropdown-certificate">
+                    <a class="dropbtn" href="/__proxyfor__/certificate/" target="_blank"
+                        title="Install CA certificate for proxying HTTPS traffic">Install Certificate</a>
                 </div>
             </div>
         </div>
-        <div class="main-view"></div>
+        <div class="main">
+            <div class="left-panel">
+                <table class="traffic-table">
+                    <thead>
+                        <tr>
+                            <th class="col-uri">Path</th>
+                            <th class="col-method">Method</th>
+                            <th class="col-status">Status</th>
+                            <th class="col-type">Type</th>
+                            <th class="col-size">Size</th>
+                            <th class="col-time">Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    </tbody>
+                </table>
+            </div>
+            <div class="right-panel">
+                <div class="tabs">
+                    <div data-tab="req" class="tab active">Request</div>
+                    <div data-tab="res" class="tab">Response</div>
+                    <div data-tab="ws" class="tab hidden">Websocket</div>
+                    <div data-tab="err" class="tab hidden">Error</div>
+                </div>
+                <div class="main-view"></div>
+            </div>
+        </div>
     </div>
     <script>
 
@@ -507,6 +557,11 @@
         const $copyDropdownContent = document.querySelector(".copy-dropdown .dropdown-content");
 
         /**
+         * @type {HTMLInputElement}
+         */
+        const $searchInput = document.getElementById("search");
+
+        /**
          * @type {AbortController}
          */
         let websocketAbortController = new AbortController();
@@ -525,6 +580,11 @@
          * @type {Traffic}
          */
         let currentTraffic = null;
+
+        /**
+         * @type {string}
+         */
+        let currentFilter = "";
 
 
         function handleDOMContentLoaded() {
@@ -591,12 +651,32 @@
                     if (kind) handleCopy(kind);
                 }
             });
+
+            $searchInput.addEventListener("input", (e) => {
+                currentFilter = e.target.value;
+                handleFilterTraffics();
+            });
+
             document.addEventListener("click", function (e) {
                 if (!e.target.closest(".dropdown")) {
                     $exportDropdownContent.style.display = "none";
                     $copyDropdownContent.style.display = "none";
                 }
             });
+        }
+
+        function handleFilterTraffics() {
+            const $trs = $trafficTableBody.querySelectorAll("tr");
+            for (const $tr of Array.from($trs)) {
+                if (currentFilter) {
+                    const filterValue = $tr.getAttribute("data-filter");
+                    currentFilter.split(/\s+/).some(word => filterValue.indexOf(word) === -1)
+                        ? $tr.classList.add("hidden")
+                        : $tr.classList.remove("hidden");
+                } else {
+                    $tr.classList.remove("hidden");
+                }
+            }
         }
 
         function handleSelectTraffic(id) {
@@ -637,12 +717,20 @@
                     syncTraffic(selectedTrafficId);
                 }
             } else {
+                const resourceType = resolveResourceType(head);
+                const filterValue = `${head.uri} ${head.method} ${head.status} ${head.mime} ${resourceType}`;
+                let cls = "";
+                if (currentFilter) {
+                    if (filterValue.indexOf(currentFilter) === -1) {
+                        cls = "hidden";
+                    }
+                }
                 const row = `
-            <tr data-traffic-id="${head.id}">
+            <tr class="${cls}" data-traffic-id="${head.id}" data-filter="${filterValue}">
                 <td class="col-uri">${head.uri}</td>
                 <td class="col-method">${head.method}</td>
                 <td class="col-status">${head.status || ""}</td>
-                <td class="col-type">${resolveResourceType(head)}</td>
+                <td class="col-type">${resourceType}</td>
                 <td class="col-size">${formatSize(head.size)}</td>
                 <td class="col-time">${formatTimeDelta(head.time)}</td>
             </tr>`;
@@ -701,19 +789,6 @@
                 .catch(err => {
                     console.error(`Failed to copy traffic ${selectedTrafficId}`, err);
                 })
-        }
-
-        function syncTraffic(id) {
-            fetch(getTrafficEndpoint(id))
-                .then(res => res.json())
-                .then(data => {
-                    currentTraffic = data;
-                })
-                .catch(err => {
-                    currentTraffic = null;
-                    console.error(`Failed to fetch traffic ${id}`, err);
-                })
-                .finally(updateTabContent);
         }
 
         function updateTabContent() {
@@ -810,6 +885,20 @@
             }
             $mainView.insertAdjacentHTML("beforeend", tmpl);
         }
+
+        function syncTraffic(id) {
+            fetch(getTrafficEndpoint(id))
+                .then(res => res.json())
+                .then(data => {
+                    currentTraffic = data;
+                })
+                .catch(err => {
+                    currentTraffic = null;
+                    console.error(`Failed to fetch traffic ${id}`, err);
+                })
+                .finally(updateTabContent);
+        }
+
 
         /**
          * @param {Traffic} traffic
