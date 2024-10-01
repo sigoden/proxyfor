@@ -49,6 +49,7 @@ unicode-width = "0.2.0"
 log = "0.4.22"
 simplelog = "0.12.2"
 shell-words = "1.1.0"
+tui-input = "0.10.1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 arboard = { version = "3.3.0", default-features = false, features = ["wayland-data-control"] }
