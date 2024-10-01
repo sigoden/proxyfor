@@ -50,7 +50,9 @@ impl State {
             return;
         };
 
+        traffic.uncompress_res_file().await;
         traffic.done_res_body(raw_size);
+
         let head = traffic.head(*id);
         let _ = self.traffics_notifier.send(head);
         match self.print_mode {
