@@ -349,6 +349,22 @@ pub struct TrafficHead {
     pub mime: String,
 }
 
+impl TrafficHead {
+    pub fn test_filter(&self, value: &str) -> bool {
+        format!(
+            "{} {} {} {}",
+            self.uri,
+            self.method,
+            self.status
+                .as_ref()
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "null".into()),
+            self.mime
+        )
+        .contains(value)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Headers {
     pub items: Vec<Header>,

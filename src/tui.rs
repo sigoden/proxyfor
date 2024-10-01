@@ -23,6 +23,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::sync::mpsc;
+use tui_input::{backend::crossterm::EventHandler, Input};
 
 const TICK_INTERVAL: u64 = 250;
 const MESSAGE_TIMEOUT: u64 = 5000;
@@ -45,11 +46,11 @@ const EXPORT_ACTIONS: [(&str, &str); 3] = [
 ];
 
 pub async fn run(state: Arc<State>, addr: &str) -> Result<()> {
-    let state_cloned = state.clone();
+    let mut traffic_rx = state.subscribe_traffics();
     let (message_tx, message_rx) = mpsc::unbounded_channel();
     let message_tx_cloned = message_tx.clone();
     tokio::spawn(async move {
-        while let Ok(head) = state_cloned.subscribe_traffics().recv().await {
+        while let Ok(head) = traffic_rx.recv().await {
             let _ = message_tx_cloned.send(Message::TrafficHead(head));
         }
     });
@@ -83,8 +84,10 @@ struct App {
     current_tab_content_scroll_size: Option<u16>,
     current_popup: Option<Popup>,
     current_notifier: Option<Notifier>,
-    step: u64,
+    input_mode: bool,
+    search_input: Input,
     should_quit: bool,
+    step: u64,
 }
 
 impl App {
@@ -102,8 +105,10 @@ impl App {
             current_tab_content_scroll_size: None,
             current_popup: None,
             current_notifier: None,
-            step: 0,
+            input_mode: false,
+            search_input: Input::default(),
             should_quit: false,
+            step: 0,
         }
     }
 
@@ -259,8 +264,24 @@ impl App {
 
     fn handle_events(&mut self, timeout: Duration) -> Result<()> {
         if crossterm::event::poll(timeout)? {
-            if let event::Event::Key(key) = event::read()? {
+            let event = event::read()?;
+            if let event::Event::Key(key) = event {
                 if key.kind != event::KeyEventKind::Press {
+                    return Ok(());
+                }
+                if self.input_mode {
+                    match key.code {
+                        KeyCode::Esc => {
+                            self.input_mode = false;
+                            self.search_input.reset();
+                        }
+                        KeyCode::Enter => {
+                            self.input_mode = false;
+                        }
+                        _ => {
+                            self.search_input.handle_event(&event);
+                        }
+                    }
                     return Ok(());
                 }
                 match key.code {
@@ -342,7 +363,7 @@ impl App {
                             self.sync_current_traffic();
                         }
                     }
-                    KeyCode::Tab => {
+                    KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
                         if self.current_view == View::Details {
                             if self.current_tab_index == 0 {
                                 self.current_tab_index = 1;
@@ -371,6 +392,11 @@ impl App {
                             }
                         }
                     }
+                    KeyCode::Char('/') => {
+                        if self.current_view == View::Main {
+                            self.input_mode = true;
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -387,6 +413,7 @@ impl App {
         }
         self.render_footer(frame, chunks[1]);
         self.render_popup(frame);
+        self.render_input(frame);
     }
 
     fn render_main_view(&mut self, frame: &mut Frame, area: Rect) {
@@ -398,21 +425,29 @@ impl App {
             let size_width = 7;
             let time_delta_width = 5;
             let uri_width = area.width
-                - 9 // 2(borders)+2(smybol)+6(columns)-1
+                - 9 // 2(borders)+2(highlight-symbol)+5(columns-gap)
                 - method_width
                 - status_width
                 - mime_width
                 - size_width
                 - time_delta_width;
 
-            let rows = self.traffic_heads.iter().map(|head| {
+            let words = self
+                .search_input
+                .value()
+                .split_whitespace()
+                .collect::<Vec<_>>();
+            let rows = self.traffic_heads.iter().filter_map(|head| {
+                if words.iter().any(|word| !head.test_filter(word)) {
+                    return None;
+                }
                 let uri = ellipsis_tail(&head.uri, uri_width);
                 let method = ellipsis_tail(&head.method, method_width);
                 let status = head.status.map(|v| v.to_string()).unwrap_or_default();
                 let mime = ellipsis_head(&head.mime.clone(), mime_width);
                 let size = format_size(head.size.map(|v| v as _));
                 let time_delta = format_time_delta(head.time.map(|v| v as _));
-                [
+                let widget = [
                     Cell::from(method),
                     Cell::from(uri),
                     Cell::from(status),
@@ -422,7 +457,8 @@ impl App {
                 ]
                 .into_iter()
                 .collect::<Row>()
-                .height(1)
+                .height(1);
+                Some(widget)
             });
             let table = Table::new(
                 rows,
@@ -546,8 +582,10 @@ impl App {
 
     fn render_help_banner(&self, frame: &mut Frame, area: Rect) {
         let text = match self.current_view {
-            View::Main => "↵ Select | ⇅ Navigate | c: Copy | e: Export | q: Quit".to_string(),
-            View::Details => "Tab: Switch | ⇅ Scroll | c: Copy | e: Export | q: Back".to_string(),
+            View::Main => {
+                "↵ Select | ⇅ Navigate | / Search | c: Copy | e: Export | q: Quit".to_string()
+            }
+            View::Details => "↹ Switch | ⇅ Scroll | c: Copy | e: Export | q: Back".to_string(),
         };
         frame.render_widget(
             Paragraph::new(Text::from(text).style(Style::new().dim())),
@@ -587,6 +625,26 @@ impl App {
         let area = popup_absolute_area(frame.area(), width, actions.len() as u16 + 2);
         frame.render_widget(Clear, area);
         frame.render_widget(paragraph, area);
+    }
+
+    fn render_input(&self, frame: &mut Frame) {
+        if !self.input_mode && self.search_input.value().is_empty() {
+            return;
+        }
+        let space = if self.input_mode { " " } else { "" };
+        let line = Line::raw(format!("|search: {}{}|", self.search_input.value(), space));
+        let frame_area = frame.area();
+        let y = frame_area.height - 2;
+        let w: u16 = line.width() as _;
+        let area = Rect {
+            x: 1,
+            y,
+            width: w,
+            height: 1,
+        };
+        frame.render_widget(Clear, area);
+        frame.render_widget(line, area);
+        frame.set_cursor_position((w.saturating_sub(1), y));
     }
 }
 

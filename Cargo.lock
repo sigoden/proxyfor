@@ -1767,6 +1767,7 @@ dependencies = [
  "tokio-stream",
  "tokio-tungstenite",
  "tokio-util",
+ "tui-input",
  "unicode-width 0.2.0",
  "url",
 ]
@@ -2743,6 +2744,16 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "tui-input"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd137780d743c103a391e06fe952487f914b299a4fe2c3626677f6a6339a7c6b"
+dependencies = [
+ "ratatui",
+ "unicode-width 0.1.14",
+]
 
 [[package]]
 name = "tungstenite"
