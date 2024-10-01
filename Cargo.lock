@@ -175,11 +175,14 @@ version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fec134f64e2bc57411226dfc4e52dec859ddfc7e711fc5e07b612584f000e4aa"
 dependencies = [
+ "brotli",
  "flate2",
  "futures-core",
  "memchr",
  "pin-project-lite",
  "tokio",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -1728,14 +1731,12 @@ dependencies = [
  "async-compression",
  "async-http-proxy",
  "base64",
- "brotli",
  "bytes",
  "clap",
  "cookie",
  "crossterm",
  "dirs",
  "fancy-regex",
- "flate2",
  "futures-util",
  "http",
  "http-body-util",
@@ -1768,7 +1769,6 @@ dependencies = [
  "tokio-util",
  "unicode-width 0.2.0",
  "url",
- "zstd",
 ]
 
 [[package]]

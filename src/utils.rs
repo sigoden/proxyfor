@@ -1,11 +1,15 @@
 use anyhow::Result;
+use async_compression::tokio::bufread::{BrotliDecoder, DeflateDecoder, GzipDecoder, ZstdDecoder};
 use serde::Serializer;
-use std::{
-    io::Read,
-    sync::{Arc, LazyLock},
-};
+use std::sync::{Arc, LazyLock};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use tokio::{
+    fs::{self, File, OpenOptions},
+    io::{AsyncRead, AsyncReadExt, BufReader, BufWriter},
+};
 use unicode_width::UnicodeWidthStr;
+
+pub const ENC_EXT: &str = ".enc";
 
 static CLIPBOARD: LazyLock<Arc<std::sync::Mutex<Option<arboard::Clipboard>>>> =
     LazyLock::new(|| std::sync::Arc::new(std::sync::Mutex::new(arboard::Clipboard::new().ok())));
@@ -113,34 +117,44 @@ pub fn set_text(_text: &str) -> anyhow::Result<()> {
     anyhow::bail!("No available clipboard")
 }
 
-pub fn decompress(data: &[u8], encoding: &str) -> Result<Vec<u8>> {
-    match encoding {
-        "gzip" => {
-            let mut decoder = flate2::read::GzDecoder::new(data);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "deflate" => {
-            let mut decoder = flate2::read::DeflateDecoder::new(data);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "br" => {
-            let mut decoder = brotli::Decompressor::new(data, 4096);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        "zstd" => {
-            let mut decoder = zstd::stream::Decoder::new(data)?;
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            Ok(decompressed)
-        }
-        _ => Ok(data.to_vec()),
-    }
+pub async fn uncompress_data(encoding: &str, path: &str) -> Result<Vec<u8>> {
+    let file = File::open(path).await?;
+    let reader = BufReader::new(file);
+    let mut decompressed = Vec::new();
+    let mut decoder: Box<dyn AsyncRead + Unpin + Send> = match encoding {
+        "deflate" => Box::new(DeflateDecoder::new(reader)),
+        "gzip" => Box::new(GzipDecoder::new(reader)),
+        "br" => Box::new(BrotliDecoder::new(reader)),
+        "zstd" => Box::new(ZstdDecoder::new(reader)),
+        _ => Box::new(reader),
+    };
+    decoder.read_to_end(&mut decompressed).await?;
+    Ok(decompressed)
+}
+
+pub async fn uncompress_file(encoding: &str, source_path: &str, target_path: &str) -> Result<()> {
+    let source_file = File::open(source_path).await?;
+    let target_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(target_path)
+        .await?;
+
+    let reader = BufReader::new(source_file);
+    let mut decoder: Box<dyn AsyncRead + Unpin + Send> = match encoding {
+        "deflate" => Box::new(DeflateDecoder::new(reader)),
+        "gzip" => Box::new(GzipDecoder::new(reader)),
+        "br" => Box::new(BrotliDecoder::new(reader)),
+        "zstd" => Box::new(ZstdDecoder::new(reader)),
+        _ => Box::new(reader),
+    };
+    let mut writer = BufWriter::new(target_file);
+
+    tokio::io::copy(&mut decoder, &mut writer).await?;
+    fs::remove_file(source_path).await?;
+
+    Ok(())
 }
 
 // see https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types

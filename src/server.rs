@@ -285,19 +285,23 @@ impl Server {
             match self.req_body_file(&mut traffic) {
                 Ok(v) => Some(v),
                 Err(err) => {
-                    return self.internal_server_error(err, traffic).await;
+                    return self
+                        .internal_server_error(err, traffic, traffic_done_tx)
+                        .await;
                 }
             }
         } else {
             None
         };
 
-        let req_body = BodyWrapper::new(req.into_body(), req_body_file, "".into(), None);
+        let req_body = BodyWrapper::new(req.into_body(), req_body_file, None);
 
         let proxy_req = match builder.body(req_body) {
             Ok(v) => v,
             Err(err) => {
-                return self.internal_server_error(err, traffic).await;
+                return self
+                    .internal_server_error(err, traffic, traffic_done_tx)
+                    .await;
             }
         };
 
@@ -321,7 +325,9 @@ impl Server {
         let proxy_res = match proxy_res {
             Ok(v) => v,
             Err(err) => {
-                return self.internal_server_error(err, traffic).await;
+                return self
+                    .internal_server_error(err, traffic, traffic_done_tx)
+                    .await;
             }
         };
 
@@ -486,7 +492,11 @@ impl Server {
                     Ok(uri) => uri,
                     Err(err) => {
                         return self
-                            .internal_server_error(format!("Invalid uri, {err}"), traffic)
+                            .internal_server_error(
+                                format!("Invalid uri, {err}"),
+                                traffic,
+                                traffic_done_tx,
+                            )
                             .await;
                     }
                 }
@@ -536,6 +546,7 @@ impl Server {
                 self.internal_server_error(
                     format!("Failed to upgrade to websocket, {err}"),
                     traffic,
+                    traffic_done_tx,
                 )
                 .await
             }
@@ -803,10 +814,12 @@ impl Server {
         *res.status_mut() = proxy_res_status;
 
         let res_body_file = if traffic.valid {
-            match self.res_body_file(&mut traffic) {
+            match self.res_body_file(&mut traffic, !encoding.is_empty()) {
                 Ok(v) => Some(v),
                 Err(err) => {
-                    return self.internal_server_error(err, traffic).await;
+                    return self
+                        .internal_server_error(err, traffic, traffic_done_tx)
+                        .await;
                 }
             }
         } else {
@@ -816,7 +829,6 @@ impl Server {
         let res_body = BodyWrapper::new(
             proxy_res.into_body(),
             res_body_file,
-            encoding,
             Some((traffic.gid, traffic_done_tx)),
         );
 
@@ -831,6 +843,7 @@ impl Server {
         &self,
         error: T,
         mut traffic: Traffic,
+        traffic_done_tx: TrafficDoneSender,
     ) -> Result<Response, hyper::Error> {
         let mut res = Response::default();
         *res.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
@@ -838,7 +851,7 @@ impl Server {
         let gid = traffic.gid;
         traffic.add_error(error.to_string());
         self.state.add_traffic(traffic).await;
-        self.state.done_traffic(gid, 0).await;
+        let _ = traffic_done_tx.send((gid, 0));
 
         Ok(res)
     }
@@ -846,7 +859,9 @@ impl Server {
     fn req_body_file(&self, traffic: &mut Traffic) -> Result<File> {
         let mime = extract_mime(&traffic.req_headers);
         let ext_name = to_ext_name(mime);
-        let path = self.temp_dir.join(format!("{}-req{ext_name}", traffic.gid));
+        let path = self
+            .temp_dir
+            .join(format!("{:05}-req{ext_name}", traffic.gid));
         let file = File::create(&path).with_context(|| {
             format!(
                 "Failed to create file '{}' to store request body",
@@ -857,10 +872,13 @@ impl Server {
         Ok(file)
     }
 
-    fn res_body_file(&self, traffic: &mut Traffic) -> Result<File> {
+    fn res_body_file(&self, traffic: &mut Traffic, encoding: bool) -> Result<File> {
         let mime = extract_mime(&traffic.res_headers);
-        let ext_name = to_ext_name(mime);
-        let path = self.temp_dir.join(format!("{}-res{ext_name}", traffic.gid));
+        let ext = to_ext_name(mime);
+        let encoding_ext = if encoding { ENC_EXT } else { "" };
+        let path = self
+            .temp_dir
+            .join(format!("{:05}-res{ext}{encoding_ext}", traffic.gid));
         let file = File::create(&path).with_context(|| {
             format!(
                 "Failed to create file '{}' to store response body",
@@ -885,7 +903,6 @@ pin_project! {
         #[pin]
         inner: B,
         file: Option<File>,
-        encoding: String,
         traffic_done: Option<(usize, TrafficDoneSender)>,
         raw_size: u64,
     }
@@ -902,13 +919,11 @@ impl<B> BodyWrapper<B> {
     pub fn new(
         inner: B,
         file: Option<File>,
-        encoding: String,
         traffic_done: Option<(usize, TrafficDoneSender)>,
     ) -> Self {
         Self {
             inner,
             file,
-            encoding,
             traffic_done,
             raw_size: 0,
         }
@@ -930,11 +945,9 @@ where
         match Pin::new(&mut this.inner).poll_frame(cx) {
             Poll::Ready(Some(Ok(frame))) => match frame.into_data() {
                 Ok(data) => {
-                    if let Ok(new_data) = decompress(&data, this.encoding) {
-                        if let Some(file) = this.file.as_mut() {
-                            let _ = file.write_all(&new_data);
-                        }
-                    };
+                    if let Some(file) = this.file.as_mut() {
+                        let _ = file.write_all(&data);
+                    }
                     *this.raw_size += data.len() as u64;
                     Poll::Ready(Some(Ok(Frame::data(data))))
                 }

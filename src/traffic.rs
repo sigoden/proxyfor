@@ -32,7 +32,7 @@ pub struct Traffic {
     pub end_time: Option<OffsetDateTime>,
     pub error: Option<String>,
     #[serde(skip)]
-    pub valid: bool,
+    pub(crate) valid: bool,
 }
 
 impl Traffic {
@@ -303,6 +303,21 @@ impl Traffic {
 
     pub(crate) fn set_start_time(&mut self) {
         self.start_time = Some(OffsetDateTime::now_utc());
+    }
+
+    pub(crate) async fn uncompress_res_file(&mut self) {
+        let Some(path) = &self.res_body_file else {
+            return;
+        };
+        let new_path = match path.strip_suffix(ENC_EXT) {
+            Some(path) => path,
+            None => return,
+        };
+        let Some(encoding) = get_header_value(&self.res_headers, "content-encoding") else {
+            return;
+        };
+        let _ = uncompress_file(encoding, path, new_path).await;
+        self.res_body_file = Some(new_path.to_string());
     }
 
     pub(crate) fn done_res_body(&mut self, raw_size: u64) {
