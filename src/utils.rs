@@ -9,7 +9,12 @@ use tokio::{
 };
 use unicode_width::UnicodeWidthStr;
 
-pub const ENC_EXT: &str = ".enc";
+pub const ENCODING_EXTS: [(&str, &str); 4] = [
+    ("deflate", ".enc.deflate"),
+    ("gzip", ".enc.gz"),
+    ("br", ".enc.br"),
+    ("zstd", ".enc.zst"),
+];
 
 static CLIPBOARD: LazyLock<Arc<std::sync::Mutex<Option<arboard::Clipboard>>>> =
     LazyLock::new(|| std::sync::Arc::new(std::sync::Mutex::new(arboard::Clipboard::new().ok())));
@@ -121,13 +126,7 @@ pub async fn uncompress_data(encoding: &str, path: &str) -> Result<Vec<u8>> {
     let file = File::open(path).await?;
     let reader = BufReader::new(file);
     let mut decompressed = Vec::new();
-    let mut decoder: Box<dyn AsyncRead + Unpin + Send> = match encoding {
-        "deflate" => Box::new(DeflateDecoder::new(reader)),
-        "gzip" => Box::new(GzipDecoder::new(reader)),
-        "br" => Box::new(BrotliDecoder::new(reader)),
-        "zstd" => Box::new(ZstdDecoder::new(reader)),
-        _ => Box::new(reader),
-    };
+    let mut decoder = uncompress_decoder(encoding, reader);
     decoder.read_to_end(&mut decompressed).await?;
     Ok(decompressed)
 }
@@ -142,19 +141,26 @@ pub async fn uncompress_file(encoding: &str, source_path: &str, target_path: &st
         .await?;
 
     let reader = BufReader::new(source_file);
-    let mut decoder: Box<dyn AsyncRead + Unpin + Send> = match encoding {
-        "deflate" => Box::new(DeflateDecoder::new(reader)),
-        "gzip" => Box::new(GzipDecoder::new(reader)),
-        "br" => Box::new(BrotliDecoder::new(reader)),
-        "zstd" => Box::new(ZstdDecoder::new(reader)),
-        _ => Box::new(reader),
-    };
+    let mut decoder = uncompress_decoder(encoding, reader);
     let mut writer = BufWriter::new(target_file);
 
     tokio::io::copy(&mut decoder, &mut writer).await?;
     fs::remove_file(source_path).await?;
 
     Ok(())
+}
+
+fn uncompress_decoder(
+    encoding: &str,
+    reader: BufReader<File>,
+) -> Box<dyn AsyncRead + Send + Unpin> {
+    match encoding {
+        "deflate" => Box::new(DeflateDecoder::new(reader)),
+        "gzip" => Box::new(GzipDecoder::new(reader)),
+        "br" => Box::new(BrotliDecoder::new(reader)),
+        "zstd" => Box::new(ZstdDecoder::new(reader)),
+        _ => Box::new(reader),
+    }
 }
 
 // see https://developer.mozilla.org/en-US/docs/Web/HTTP/Basics_of_HTTP/MIME_types/Common_types

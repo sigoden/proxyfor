@@ -109,6 +109,14 @@ impl ServerBuilder {
 
     pub fn build(self) -> Arc<Server> {
         let temp_dir = std::env::temp_dir().join(format!("proxyfor-{}", process::id()));
+        info!(
+            "reverse_proxy_url={:?}, title_filters={:?}, mime_filters={:?}, web={}, temp_dir={}",
+            self.reverse_proxy_url,
+            self.title_filters,
+            self.mime_filters,
+            self.web,
+            temp_dir.display(),
+        );
         Arc::new(Server {
             ca: self.ca,
             reverse_proxy_url: self.reverse_proxy_url,
@@ -170,7 +178,10 @@ impl Server {
         });
         tokio::spawn(async move {
             while let Some((gid, raw_size)) = traffic_done_rx.recv().await {
-                self.state.done_traffic(gid, raw_size).await;
+                let state = self.state.clone();
+                tokio::spawn(async move {
+                    state.done_traffic(gid, raw_size).await;
+                });
             }
         });
         Ok(stop_tx)
@@ -814,7 +825,7 @@ impl Server {
         *res.status_mut() = proxy_res_status;
 
         let res_body_file = if traffic.valid {
-            match self.res_body_file(&mut traffic, !encoding.is_empty()) {
+            match self.res_body_file(&mut traffic, &encoding) {
                 Ok(v) => Some(v),
                 Err(err) => {
                     return self
@@ -872,10 +883,13 @@ impl Server {
         Ok(file)
     }
 
-    fn res_body_file(&self, traffic: &mut Traffic, encoding: bool) -> Result<File> {
+    fn res_body_file(&self, traffic: &mut Traffic, encoding: &str) -> Result<File> {
         let mime = extract_mime(&traffic.res_headers);
         let ext = to_ext_name(mime);
-        let encoding_ext = if encoding { ENC_EXT } else { "" };
+        let encoding_ext = match ENCODING_EXTS.iter().find(|(v, _)| *v == encoding) {
+            Some((_, encoding_ext)) => encoding_ext,
+            None => "",
+        };
         let path = self
             .temp_dir
             .join(format!("{:05}-res{ext}{encoding_ext}", traffic.gid));

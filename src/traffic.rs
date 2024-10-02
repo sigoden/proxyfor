@@ -77,7 +77,7 @@ impl Traffic {
     }
 
     pub async fn markdown(&self) -> String {
-        let (req_body, res_body) = self.bodies().await;
+        let (req_body, res_body) = self.bodies(false).await;
 
         let mut lines: Vec<String> = vec![];
 
@@ -87,26 +87,16 @@ impl Traffic {
             lines.push(render_header("REQUEST HEADERS", headers));
         }
 
-        if let (Some(body), Some(body_file)) = (req_body, &self.req_body_file) {
-            lines.push(render_body(
-                "REQUEST BODY",
-                &body,
-                body_file,
-                &self.req_headers,
-            ));
+        if let Some(body) = req_body {
+            lines.push(render_body("REQUEST BODY", &body, &self.req_headers));
         }
 
         if let Some(headers) = &self.res_headers {
             lines.push(render_header("RESPONSE HEADERS", headers));
         }
 
-        if let (Some(body), Some(body_file)) = (res_body, &self.res_body_file) {
-            lines.push(render_body(
-                "RESPONSE BODY",
-                &body,
-                body_file,
-                &self.res_headers,
-            ));
+        if let Some(body) = res_body {
+            lines.push(render_body("RESPONSE BODY", &body, &self.res_headers));
         }
 
         if let Some(error) = &self.error {
@@ -125,7 +115,7 @@ impl Traffic {
     }
 
     pub async fn har_entry(&self) -> Option<Value> {
-        let (req_body, res_body) = self.bodies().await;
+        let (req_body, res_body) = self.bodies(true).await;
         let http_version = self.http_version.clone().unwrap_or_default();
         let request = json!({
             "method": self.method,
@@ -166,7 +156,7 @@ impl Traffic {
     }
 
     pub async fn curl(&self) -> String {
-        let req_body = Body::read(&self.req_body_file).await;
+        let req_body = Body::read(&self.req_body_file, false).await;
 
         let mut output = format!("curl {}", self.uri);
         let escape_single_quote = |v: &str| v.replace('\'', r#"'\''"#);
@@ -187,11 +177,12 @@ impl Traffic {
                 escape_single_quote(&header.value)
             ))
         }
-        if let (Some(body), Some(body_file)) = (req_body, &self.req_body_file) {
+        if let Some(body) = req_body {
+            let value = shell_words::quote(&body.value);
             if body.is_utf8() {
-                output.push_str(&format!(" \\\n  -d {}", shell_words::quote(&body.value)));
+                output.push_str(&format!(" \\\n  -d {value}"));
             } else {
-                output.push_str(&format!(" \\\n  -t {}", shell_words::quote(body_file)));
+                output.push_str(&format!(" \\\n  -t {value}"));
             }
         }
         output
@@ -199,7 +190,7 @@ impl Traffic {
 
     pub async fn json(&self) -> Value {
         let mut value = json!(self);
-        let (req_body, res_body) = self.bodies().await;
+        let (req_body, res_body) = self.bodies(true).await;
         value["req_body"] = json!(req_body);
         value["res_body"] = json!(res_body);
         value
@@ -214,20 +205,13 @@ impl Traffic {
             )),
             "curl" => Ok((self.curl().await, "text/plain; charset=UTF-8")),
             "req-body" | "res-body" => {
-                let body_info = match format {
-                    "req-body" => (Body::read(&self.req_body_file).await, &self.req_body_file),
-                    "res-body" => (Body::read(&self.res_body_file).await, &self.res_body_file),
+                let body = match format {
+                    "req-body" => Body::read(&self.req_body_file, false).await,
+                    "res-body" => Body::read(&self.res_body_file, false).await,
                     _ => unreachable!(),
                 };
-                match body_info {
-                    (Some(body), Some(body_file)) => {
-                        let data = if body.is_utf8() {
-                            &body.value
-                        } else {
-                            body_file
-                        };
-                        Ok((data.clone(), "text/plain; charset=UTF-8"))
-                    }
+                match body {
+                    Some(body) => Ok((body.value.clone(), "text/plain; charset=UTF-8")),
                     _ => bail!("No {format} data"),
                 }
             }
@@ -309,12 +293,12 @@ impl Traffic {
         let Some(path) = &self.res_body_file else {
             return;
         };
-        let new_path = match path.strip_suffix(ENC_EXT) {
-            Some(path) => path,
+        let (new_path, encoding) = match ENCODING_EXTS
+            .into_iter()
+            .find_map(|(encoding, ext)| path.strip_suffix(ext).map(|v| (v, encoding)))
+        {
+            Some(v) => v,
             None => return,
-        };
-        let Some(encoding) = get_header_value(&self.res_headers, "content-encoding") else {
-            return;
         };
         let _ = uncompress_file(encoding, path, new_path).await;
         self.res_body_file = Some(new_path.to_string());
@@ -330,10 +314,10 @@ impl Traffic {
         }
     }
 
-    pub(crate) async fn bodies(&self) -> (Option<Body>, Option<Body>) {
+    pub(crate) async fn bodies(&self, binary_in_base64: bool) -> (Option<Body>, Option<Body>) {
         tokio::join!(
-            Body::read(&self.req_body_file),
-            Body::read(&self.res_body_file)
+            Body::read(&self.req_body_file, binary_in_base64),
+            Body::read(&self.res_body_file, binary_in_base64)
         )
     }
 }
@@ -403,23 +387,60 @@ pub struct Body {
 }
 
 impl Body {
-    pub async fn read(path: &Option<String>) -> Option<Self> {
+    pub async fn read(path: &Option<String>, binary_in_base64: bool) -> Option<Self> {
         let path = path.as_ref()?;
-        let data = tokio::fs::read(path).await.ok()?;
-        if data.is_empty() {
-            return None;
-        }
-        Some(Self::bytes(&data))
+
+        let encoding = ENCODING_EXTS
+            .into_iter()
+            .find_map(|(encoding, ext)| path.strip_suffix(ext).map(|_| encoding));
+        let ret = match encoding {
+            Some(encoding) => {
+                let data = uncompress_data(encoding, path).await.ok()?;
+                if data.is_empty() {
+                    return None;
+                }
+                if binary_in_base64 {
+                    Self::bytes(&data)
+                } else {
+                    match std::str::from_utf8(&data) {
+                        Ok(text) => Self::text(text),
+                        Err(_) => Self::path(path),
+                    }
+                }
+            }
+            None => {
+                if binary_in_base64 {
+                    let data = tokio::fs::read(path).await.ok()?;
+                    if data.is_empty() {
+                        return None;
+                    }
+                    Self::bytes(&data)
+                } else {
+                    match tokio::fs::read_to_string(path).await {
+                        Ok(text) => {
+                            if text.is_empty() {
+                                return None;
+                            }
+                            Self::text(&text)
+                        }
+                        Err(err) => {
+                            if err.kind() != std::io::ErrorKind::InvalidData {
+                                return None;
+                            } else {
+                                Self::path(path)
+                            }
+                        }
+                    }
+                }
+            }
+        };
+        Some(ret)
     }
 
     pub fn bytes(data: &[u8]) -> Self {
         let size = data.len();
         match std::str::from_utf8(data) {
-            Ok(value) => Body {
-                encode: "utf8".to_string(),
-                value: value.to_string(),
-                size: size as _,
-            },
+            Ok(text) => Self::text(text),
             Err(_) => Body {
                 encode: "base64".to_string(),
                 value: STANDARD.encode(data),
@@ -428,11 +449,19 @@ impl Body {
         }
     }
 
-    pub fn text(value: &str) -> Self {
+    pub fn text(text: &str) -> Self {
         Body {
             encode: "utf8".to_string(),
-            value: value.to_string(),
-            size: value.len() as _,
+            value: text.to_string(),
+            size: text.len() as _,
+        }
+    }
+
+    pub fn path(path: &str) -> Self {
+        Body {
+            encode: "path".to_string(),
+            value: path.to_string(),
+            size: 0,
         }
     }
 
@@ -456,24 +485,19 @@ fn render_header(title: &str, headers: &Headers) -> String {
     )
 }
 
-pub(crate) fn render_body(
-    title: &str,
-    body: &Body,
-    body_path: &str,
-    headers: &Option<Headers>,
-) -> String {
+pub(crate) fn render_body(title: &str, body: &Body, headers: &Option<Headers>) -> String {
     let content_type = extract_mime(headers);
+    let value = &body.value;
     if body.is_utf8() {
-        let body_value = &body.value;
         let lang = to_md_lang(content_type);
         format!(
             r#"{title}
 ```{lang}
-{body_value}
+{value}
 ```"#
         )
     } else {
-        format!("{title}\n\n[BINARY DATA]({body_path})")
+        format!("{title}\n\n[BINARY DATA]({value})")
     }
 }
 
@@ -644,44 +668,4 @@ fn cal_headers_size(headers: &HeaderMap) -> u64 {
         })
         .sum::<u64>()
         + 7
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use http::{HeaderName, HeaderValue};
-    use pretty_assertions::assert_eq;
-
-    fn create_headers(values: &[(&str, &str)]) -> Headers {
-        let mut headers = HeaderMap::new();
-
-        for (key, value) in values {
-            let header_name = HeaderName::from_bytes(key.as_bytes()).unwrap();
-            let header_value = HeaderValue::from_str(value).unwrap();
-            headers.insert(header_name, header_value);
-        }
-
-        Headers::new(&headers)
-    }
-
-    #[test]
-    fn test_render_body() {
-        let body = Body::bytes(&[
-            0x6b, 0x4e, 0x1a, 0xc3, 0xaf, 0x03, 0xd2, 0x1e, 0x7e, 0x73, 0xba, 0xc8, 0xbd, 0x84,
-            0x0f, 0x83,
-        ]);
-        let output = render_body(
-            "RESPONSE BODY",
-            &body,
-            "/tmp/proxyfor-666/1-res",
-            &Some(create_headers(&[(
-                "content-type",
-                "application/octet-stream",
-            )])),
-        );
-        let expect = r#"RESPONSE BODY
-
-[BINARY DATA](/tmp/proxyfor-666/1-res)"#;
-        assert_eq!(output, expect);
-    }
 }

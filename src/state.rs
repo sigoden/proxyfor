@@ -122,7 +122,7 @@ impl State {
                     .join("\n\n");
                 Ok((output, "text/plain; charset=UTF-8"))
             }
-            "mem" => {
+            "json" => {
                 let values = futures_util::future::join_all(traffics.iter().map(|(_, v)| v.json()))
                     .await
                     .into_iter()
