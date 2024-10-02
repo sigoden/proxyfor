@@ -15,7 +15,10 @@ use ratatui::{
     prelude::*,
     style::palette::material::GRAY,
     text::{Line, Span},
-    widgets::{Block, Cell, Clear, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{
+        Block, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation, ScrollbarState, Table,
+        TableState, Wrap,
+    },
 };
 use std::{
     io,
@@ -58,8 +61,8 @@ pub async fn run(state: Arc<State>, addr: &str) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+
+    let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
     let ret = App::new(state, addr, message_tx).run(&mut terminal, message_rx);
 
@@ -75,14 +78,16 @@ struct App {
     state: Arc<State>,
     addr: String,
     message_tx: mpsc::UnboundedSender<Message>,
-    traffic_table_state: TableState,
-    traffic_heads: Vec<TrafficHead>,
-    current_traffic: Option<Box<TrafficDetails>>,
+    selected_traffic_index: usize,
+    traffics: Vec<TrafficHead>,
+    filtered_traffic_indices: Option<Vec<usize>>,
+    details_tab_index: usize,
+    details_scroll_offset: u16,
+    details_scroll_size: Option<u16>,
     current_view: View,
-    current_tab_index: usize,
-    current_tab_content_scroll_offset: u16,
-    current_tab_content_scroll_size: Option<u16>,
+    current_traffic: Option<Box<TrafficDetails>>,
     current_popup: Option<Popup>,
+    current_confirm: Option<Confirm>,
     current_notifier: Option<Notifier>,
     input_mode: bool,
     search_input: Input,
@@ -96,14 +101,16 @@ impl App {
             state,
             addr: addr.to_string(),
             message_tx,
-            traffic_table_state: TableState::default(),
-            traffic_heads: Vec::new(),
-            current_traffic: None,
+            selected_traffic_index: 0,
+            traffics: Vec::new(),
+            filtered_traffic_indices: None,
+            details_tab_index: 0,
+            details_scroll_offset: 0,
+            details_scroll_size: None,
             current_view: View::Main,
-            current_tab_index: 0,
-            current_tab_content_scroll_offset: 0,
-            current_tab_content_scroll_size: None,
+            current_traffic: None,
             current_popup: None,
+            current_confirm: None,
             current_notifier: None,
             input_mode: false,
             search_input: Input::default(),
@@ -126,7 +133,7 @@ impl App {
                 .checked_sub(last_tick.elapsed())
                 .unwrap_or_else(|| Duration::from_secs(0));
 
-            if let Ok(message) = rx.try_recv() {
+            while let Ok(message) = rx.try_recv() {
                 self.handle_message(message);
             }
 
@@ -147,13 +154,63 @@ impl App {
         Ok(())
     }
 
-    fn selected_traffic(&self) -> Option<&TrafficHead> {
-        self.traffic_table_state
-            .selected()
-            .and_then(|v| self.traffic_heads.get(v))
+    fn search(&mut self) {
+        let words = self
+            .search_input
+            .value()
+            .split_whitespace()
+            .collect::<Vec<_>>();
+
+        let selected_id = self.selected_traffic().map(|v| v.id);
+        if words.is_empty() {
+            self.filtered_traffic_indices = None;
+            self.selected_traffic_index = selected_id
+                .and_then(|id| {
+                    self.traffics
+                        .iter()
+                        .enumerate()
+                        .find(|(_, head)| head.id == id)
+                        .map(|(i, _)| i)
+                })
+                .unwrap_or_default();
+        } else {
+            let mut idx = 0;
+            let mut selected_index = None;
+            let ids = self
+                .traffics
+                .iter()
+                .enumerate()
+                .filter_map(|(i, head)| {
+                    if words.iter().all(|word| head.test_filter(word)) {
+                        if let Some(true) = selected_id.map(|v| v == head.id) {
+                            selected_index = Some(idx);
+                        }
+                        idx += 1;
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            self.filtered_traffic_indices = Some(ids);
+            self.selected_traffic_index = selected_index.unwrap_or_default();
+        }
     }
 
-    fn sync_current_traffic(&mut self) {
+    fn filtered_traffics(&self) -> Vec<&TrafficHead> {
+        match &self.filtered_traffic_indices {
+            Some(indices) => indices.iter().map(|&i| &self.traffics[i]).collect(),
+            None => self.traffics.iter().collect(),
+        }
+    }
+
+    fn selected_traffic(&self) -> Option<&TrafficHead> {
+        self.filtered_traffics()
+            .get(self.selected_traffic_index)
+            .copied()
+    }
+
+    fn update_current_traffic(&mut self) {
         let Some(traffic_id) = self.selected_traffic().map(|v| v.id) else {
             return;
         };
@@ -168,7 +225,8 @@ impl App {
                 traffic, req_body, res_body,
             ))));
         });
-        self.current_traffic = None;
+        self.details_scroll_offset = 0;
+        self.details_scroll_size = None;
     }
 
     fn run_copy_command(&mut self, idx: usize) {
@@ -241,19 +299,13 @@ impl App {
     fn handle_message(&mut self, message: Message) {
         match message {
             Message::TrafficHead(head) => {
-                if let Some(index) = self.traffic_heads.iter().position(|v| v.id == head.id) {
-                    self.traffic_heads[index] = head;
-                    if self.traffic_table_state.selected() == Some(index)
-                        && self.current_view == View::Details
-                    {
-                        self.sync_current_traffic();
+                if let Some(index) = self.traffics.iter().position(|v| v.id == head.id) {
+                    self.traffics[index] = head;
+                    if self.selected_traffic_index == index && self.current_view == View::Details {
+                        self.update_current_traffic();
                     }
                 } else {
-                    let is_empty = self.traffic_heads.is_empty();
-                    self.traffic_heads.push(head);
-                    if is_empty {
-                        self.traffic_table_state.select(Some(0));
-                    }
+                    self.traffics.push(head);
                 }
             }
             Message::TrafficDetails(details) => self.current_traffic = Some(details),
@@ -282,17 +334,23 @@ impl App {
                             self.search_input.handle_event(&event);
                         }
                     }
+                    self.search();
                     return Ok(());
                 }
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if self.current_popup.is_some() {
                             self.current_popup = None;
-                        } else if self.current_view == View::Details {
-                            self.current_traffic = None;
-                            self.current_view = View::Main;
                         } else {
-                            self.should_quit = true;
+                            match self.current_view {
+                                View::Main => {
+                                    self.current_confirm = Some(Confirm::Quit);
+                                }
+                                View::Details => {
+                                    self.current_traffic = None;
+                                    self.current_view = View::Main;
+                                }
+                            }
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
@@ -305,19 +363,21 @@ impl App {
                                     *idx = next_idx(EXPORT_ACTIONS.len(), *idx);
                                 }
                             }
-                        } else if self.current_view == View::Main {
-                            let i = match self.traffic_table_state.selected() {
-                                Some(i) => next_idx(self.traffic_heads.len(), i),
-                                None => 0,
-                            };
-                            self.traffic_table_state.select(Some(i));
-                        } else if self.current_view == View::Details {
-                            if let Some(size) = self.current_tab_content_scroll_size {
-                                if size > 0 {
-                                    if self.current_tab_content_scroll_offset >= size {
-                                        self.current_tab_content_scroll_offset = size
-                                    } else {
-                                        self.current_tab_content_scroll_offset += 1;
+                        } else {
+                            match self.current_view {
+                                View::Main => {
+                                    self.selected_traffic_index =
+                                        next_idx(self.traffics.len(), self.selected_traffic_index);
+                                }
+                                View::Details => {
+                                    if let Some(size) = self.details_scroll_size {
+                                        if size > 0 {
+                                            if self.details_scroll_offset == size {
+                                                self.details_scroll_offset = 0
+                                            } else {
+                                                self.details_scroll_offset += 1;
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -333,16 +393,22 @@ impl App {
                                     *idx = prev_idx(EXPORT_ACTIONS.len(), *idx);
                                 }
                             }
-                        } else if self.current_view == View::Main {
-                            let i = match self.traffic_table_state.selected() {
-                                Some(i) => prev_idx(self.traffic_heads.len(), i),
-                                None => 0,
-                            };
-                            self.traffic_table_state.select(Some(i));
-                        } else if self.current_view == View::Details {
-                            if let Some(size) = self.current_tab_content_scroll_size {
-                                if size > 0 && self.current_tab_content_scroll_offset > 0 {
-                                    self.current_tab_content_scroll_offset -= 1;
+                        } else {
+                            match self.current_view {
+                                View::Main => {
+                                    self.selected_traffic_index =
+                                        prev_idx(self.traffics.len(), self.selected_traffic_index);
+                                }
+                                View::Details => {
+                                    if let Some(size) = self.details_scroll_size {
+                                        if size > 0 {
+                                            if self.details_scroll_offset == 0 {
+                                                self.details_scroll_offset = size;
+                                            } else {
+                                                self.details_scroll_offset -= 1;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -355,23 +421,28 @@ impl App {
                             }
                             self.current_popup = None;
                         } else if self.current_view == View::Main
-                            && self.traffic_table_state.selected().is_some()
+                            && !self.filtered_traffics().is_empty()
                         {
                             self.current_view = View::Details;
-                            self.current_tab_content_scroll_offset = 0;
-                            self.current_tab_content_scroll_size = None;
-                            self.sync_current_traffic();
+                            self.update_current_traffic();
                         }
                     }
                     KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
                         if self.current_view == View::Details {
-                            if self.current_tab_index == 0 {
-                                self.current_tab_index = 1;
+                            if self.details_tab_index == 0 {
+                                self.details_tab_index = 1;
                             } else {
-                                self.current_tab_index = 0;
+                                self.details_tab_index = 0;
                             }
-                            self.current_tab_content_scroll_offset = 0;
-                            self.current_tab_content_scroll_size = None;
+                            self.details_scroll_offset = 0;
+                            self.details_scroll_size = None;
+                        }
+                    }
+                    KeyCode::Char(' ') => {
+                        if self.current_view == View::Details {
+                            self.selected_traffic_index =
+                                next_idx(self.traffics.len(), self.selected_traffic_index);
+                            self.update_current_traffic();
                         }
                     }
                     KeyCode::Char('c') => {
@@ -385,7 +456,7 @@ impl App {
                     }
                     KeyCode::Char('e') => {
                         if self.current_popup.is_none() {
-                            if self.traffic_heads.is_empty() {
+                            if self.traffics.is_empty() {
                                 self.notify("No traffics", true);
                             } else {
                                 self.current_popup = Some(Popup::Export(0));
@@ -395,6 +466,16 @@ impl App {
                     KeyCode::Char('/') => {
                         if self.current_view == View::Main {
                             self.input_mode = true;
+                        }
+                    }
+                    KeyCode::Char('y') => {
+                        if let Some(Confirm::Quit) = self.current_confirm {
+                            self.should_quit = true;
+                        }
+                    }
+                    KeyCode::Char('n') => {
+                        if self.current_confirm.is_some() {
+                            self.current_confirm = None;
                         }
                     }
                     _ => {}
@@ -417,8 +498,16 @@ impl App {
     }
 
     fn render_main_view(&mut self, frame: &mut Frame, area: Rect) {
-        let block = Block::bordered().title(format!("Proxyfor ({})", self.addr));
-        if area.width > LARGE_WIDTH {
+        let traffics = self.filtered_traffics();
+        let traffics_len = traffics.len();
+        let mut block = Block::bordered().title(format!("Proxyfor ({})", self.addr));
+        let mut table_state = TableState::new();
+        if !traffics.is_empty() {
+            let pagination = format!("[{}/{traffics_len}]", self.selected_traffic_index + 1);
+            block = block.title_bottom(Line::raw(pagination).alignment(Alignment::Right));
+            table_state.select(Some(self.selected_traffic_index));
+        };
+        let show_scrollbar = if area.width > LARGE_WIDTH {
             let method_width = 4;
             let status_width = 3;
             let mime_width = 16;
@@ -432,15 +521,7 @@ impl App {
                 - size_width
                 - time_delta_width;
 
-            let words = self
-                .search_input
-                .value()
-                .split_whitespace()
-                .collect::<Vec<_>>();
-            let rows = self.traffic_heads.iter().filter_map(|head| {
-                if words.iter().any(|word| !head.test_filter(word)) {
-                    return None;
-                }
+            let rows = traffics.into_iter().map(|head| {
                 let uri = ellipsis_tail(&head.uri, uri_width);
                 let method = ellipsis_tail(&head.method, method_width);
                 let status = head.status.map(|v| v.to_string()).unwrap_or_default();
@@ -458,7 +539,7 @@ impl App {
                 .into_iter()
                 .collect::<Row>()
                 .height(1);
-                Some(widget)
+                widget
             });
             let table = Table::new(
                 rows,
@@ -475,10 +556,12 @@ impl App {
             .highlight_style(SELECTED_STYLE)
             .block(block);
 
-            frame.render_stateful_widget(table, area, &mut self.traffic_table_state);
+            frame.render_stateful_widget(table, area, &mut table_state);
+
+            traffics_len > area.height.saturating_sub(2) as usize
         } else {
             let width = area.width - 4;
-            let rows = self.traffic_heads.iter().map(|head| {
+            let rows = traffics.into_iter().map(|head| {
                 let head_text = generate_title(head, width);
                 [Cell::from(head_text)]
                     .into_iter()
@@ -491,18 +574,34 @@ impl App {
                 .highlight_style(SELECTED_STYLE)
                 .block(block);
 
-            frame.render_stateful_widget(table, area, &mut self.traffic_table_state);
+            frame.render_stateful_widget(table, area, &mut table_state);
+
+            traffics_len > (area.height.saturating_sub(1) / 2) as usize
+        };
+
+        if show_scrollbar {
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("↑"))
+                    .end_symbol(Some("↓")),
+                area,
+                &mut ScrollbarState::new(traffics_len as _)
+                    .position(self.selected_traffic_index as _),
+            );
         }
     }
 
     fn render_details_view(&mut self, frame: &mut Frame, area: Rect) {
-        let is_req = self.current_tab_index == 0;
         let Some(head) = self.selected_traffic() else {
             return;
         };
         let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(area);
         let title = generate_title(head, area.width);
         frame.render_widget(Text::from(title), chunks[0]);
+
+        let is_req = self.details_tab_index == 0;
+        let traffics = self.filtered_traffics();
+        let traffics_len = traffics.len();
 
         let (request_style, response_style) = if is_req {
             (SELECTED_STYLE, Style::default())
@@ -516,13 +615,17 @@ impl App {
             Some(_) => "Error",
             None => "Response",
         };
-        let block = Block::bordered().title(Line::from(vec![
+        let mut block = Block::bordered().title(Line::from(vec![
             Span::raw(" "),
             Span::styled("Request", request_style),
             Span::raw(" / "),
             Span::styled(tab_second_title, response_style),
             Span::raw(" "),
         ]));
+        if !traffics.is_empty() {
+            let pagination = format!("[{}/{traffics_len}]", self.selected_traffic_index + 1);
+            block = block.title_bottom(Line::raw(pagination).alignment(Alignment::Right));
+        }
         let width = area.width - 2;
         let mut texts = vec![];
         let (headers, body) = if is_req {
@@ -549,24 +652,35 @@ impl App {
         let paragraph = Paragraph::new(texts)
             .block(block)
             .wrap(Wrap { trim: false })
-            .scroll((self.current_tab_content_scroll_offset, 0));
-        if self.current_tab_content_scroll_size.is_none() {
-            let line_count = paragraph.line_count(width) as u16;
-            let rect_height = chunks[1].height;
-            let size = if line_count > rect_height {
-                Some(line_count - rect_height)
-            } else {
-                Some(0)
-            };
-            self.current_tab_content_scroll_size = size;
-        }
+            .scroll((self.details_scroll_offset, 0));
+        let scroll_size = match self.details_scroll_size {
+            Some(v) => v,
+            None => {
+                let value = (paragraph.line_count(width) as u16).saturating_sub(chunks[1].height);
+                self.details_scroll_size = Some(value);
+                value
+            }
+        };
         frame.render_widget(paragraph, chunks[1]);
+        if scroll_size > 0 {
+            frame.render_stateful_widget(
+                Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("↑"))
+                    .end_symbol(Some("↓")),
+                chunks[1],
+                &mut ScrollbarState::new(scroll_size as _)
+                    .position(self.details_scroll_offset as _),
+            );
+        }
     }
 
     fn render_footer(&self, frame: &mut Frame, area: Rect) {
-        match &self.current_notifier {
-            Some(notifier) => self.render_notifier(frame, area, notifier),
-            None => self.render_help_banner(frame, area),
+        if let Some(confirm) = &self.current_confirm {
+            self.render_confirm(frame, area, confirm);
+        } else if let Some(notifier) = &self.current_notifier {
+            self.render_notifier(frame, area, notifier)
+        } else {
+            self.render_help_banner(frame, area)
         }
     }
 
@@ -581,16 +695,38 @@ impl App {
     }
 
     fn render_help_banner(&self, frame: &mut Frame, area: Rect) {
-        let text = match self.current_view {
-            View::Main => {
-                "↵ Select | ⇅ Navigate | / Search | c: Copy | e: Export | q: Quit".to_string()
-            }
-            View::Details => "↹ Switch | ⇅ Scroll | c: Copy | e: Export | q: Back".to_string(),
+        let keybindings = self.current_view.keybindings();
+        let style = Style::default().dim();
+        let spans = keybindings.iter().enumerate().flat_map(|(i, (key, desc))| {
+            let sep: Span = if i == keybindings.len() - 1 {
+                "".into()
+            } else {
+                " | ".into()
+            };
+            vec![
+                Span::raw(*key),
+                Span::raw(" "),
+                Span::raw(*desc).style(style),
+                sep.style(style),
+            ]
+        });
+        frame.render_widget(Paragraph::new(Line::from_iter(spans)), area);
+    }
+
+    fn render_confirm(&self, frame: &mut Frame, area: Rect, confirm: &Confirm) {
+        let text = match confirm {
+            Confirm::Quit => "Quit",
         };
-        frame.render_widget(
-            Paragraph::new(Text::from(text).style(Style::new().dim())),
-            area,
-        );
+        let style = Style::default().bold().underlined();
+        let line = Line::from(vec![
+            text.into(),
+            " (".into(),
+            Span::raw("y").style(style),
+            "es,".into(),
+            Span::raw("n").style(style),
+            "o)?".into(),
+        ]);
+        frame.render_widget(Paragraph::new(line), area);
     }
 
     fn render_popup(&self, frame: &mut Frame) {
@@ -700,6 +836,29 @@ enum View {
     Details,
 }
 
+impl View {
+    fn keybindings(&self) -> &[(&str, &str)] {
+        match self {
+            View::Main => &[
+                ("↵", "Select"),
+                ("⇅", "Navigate"),
+                ("/", "Search"),
+                ("c", "Copy"),
+                ("e", "Export"),
+                ("q", "Quit"),
+            ],
+            View::Details => &[
+                ("↹", "Switch"),
+                ("⇅", "Scroll"),
+                ("␣", "Next"),
+                ("c", "Copy"),
+                ("e", "Export"),
+                ("q", "Back"),
+            ],
+        }
+    }
+}
+
 #[derive(Debug)]
 enum Message {
     TrafficHead(TrafficHead),
@@ -712,8 +871,13 @@ type TrafficDetails = (Traffic, Option<Body>, Option<Body>);
 
 type Notifier = (String, bool, u64); // (message, is_error, timeout_step)
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum Popup {
     Copy(usize),
     Export(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Confirm {
+    Quit,
 }
