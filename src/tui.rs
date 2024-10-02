@@ -163,7 +163,7 @@ impl App {
             let Some(traffic) = state.get_traffic(traffic_id).await else {
                 return;
             };
-            let (req_body, res_body) = traffic.bodies().await;
+            let (req_body, res_body) = traffic.bodies(false).await;
             let _ = message_tx.send(Message::TrafficDetails(Box::new((
                 traffic, req_body, res_body,
             ))));
@@ -211,9 +211,9 @@ impl App {
                         "har" => ".har",
                         _ => ".txt",
                     };
-                    let path = std::env::temp_dir().join(format!("{EXPORT_ALL_TRAFFICS}{ext}"));
+                    let path = format!("{EXPORT_ALL_TRAFFICS}{ext}");
                     let message = match tokio::fs::write(&path, data).await {
-                        Ok(_) => Message::Info(format!("Exported to '{}'", path.display())),
+                        Ok(_) => Message::Info(format!("Exported to {path}")),
                         Err(err) => Message::Error(err.to_string()),
                     };
                     let _ = message_tx.send(message);
@@ -419,7 +419,7 @@ impl App {
     fn render_main_view(&mut self, frame: &mut Frame, area: Rect) {
         let block = Block::bordered().title(format!("Proxyfor ({})", self.addr));
         if area.width > LARGE_WIDTH {
-            let method_width = 7;
+            let method_width = 4;
             let status_width = 3;
             let mime_width = 16;
             let size_width = 7;
@@ -525,25 +525,25 @@ impl App {
         ]));
         let width = area.width - 2;
         let mut texts = vec![];
-        let (headers, body, body_file) = if is_req {
-            (&traffic.req_headers, req_body, &traffic.req_body_file)
+        let (headers, body) = if is_req {
+            (&traffic.req_headers, req_body)
         } else if let Some(error) = &traffic.error {
             texts.push(Line::raw(error));
-            (&None, &None, &None)
+            (&None, &None)
         } else {
-            (&traffic.res_headers, res_body, &traffic.res_body_file)
+            (&traffic.res_headers, res_body)
         };
         if let Some(headers) = headers {
             for header in &headers.items {
                 texts.push(Line::raw(format!("{}: {}", header.name, header.value)));
             }
         }
-        if let (Some(body), Some(body_file)) = (body, body_file) {
+        if let Some(body) = body {
             texts.push(Line::raw("—".repeat(width as _)));
             if body.is_utf8() {
                 texts.extend(body.value.lines().map(Line::raw));
             } else {
-                texts.push(Line::raw(body_file).style(Style::default().underlined()));
+                texts.push(Line::raw(&body.value).style(Style::default().underlined()));
             }
         }
         let paragraph = Paragraph::new(texts)
