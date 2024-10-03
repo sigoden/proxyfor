@@ -6,10 +6,11 @@ use crate::{
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, KeyCode},
+    event::{self, KeyCode, KeyModifiers},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use http::StatusCode;
 use ratatui::{
     backend::CrosstermBackend,
     prelude::*,
@@ -27,6 +28,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use tui_input::{backend::crossterm::EventHandler, Input};
+use unicode_width::UnicodeWidthStr;
 
 const TICK_INTERVAL: u64 = 250;
 const MESSAGE_TIMEOUT: u64 = 5000;
@@ -308,7 +310,11 @@ impl App {
                     self.traffics.push(head);
                 }
             }
-            Message::TrafficDetails(details) => self.current_traffic = Some(details),
+            Message::TrafficDetails(details) => {
+                self.current_traffic = Some(details);
+                self.details_scroll_offset = 0;
+                self.details_scroll_size = None;
+            }
             Message::Error(error) => self.notify(&error, true),
             Message::Info(info) => self.notify(&info, false),
         }
@@ -336,8 +342,25 @@ impl App {
                     }
                     self.search();
                     return Ok(());
+                } else if self.current_confirm.is_some() {
+                    match key.code {
+                        KeyCode::Char('y') => {
+                            if let Some(Confirm::Quit) = self.current_confirm {
+                                self.should_quit = true;
+                            }
+                        }
+                        KeyCode::Esc | KeyCode::Char('n') => {
+                            self.current_confirm = None;
+                        }
+                        _ => {}
+                    }
+                    return Ok(());
                 }
                 match key.code {
+                    KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                        self.current_popup = None;
+                        self.current_confirm = Some(Confirm::Quit);
+                    }
                     KeyCode::Esc | KeyCode::Char('q') => {
                         if self.current_popup.is_some() {
                             self.current_popup = None;
@@ -427,7 +450,7 @@ impl App {
                             self.update_current_traffic();
                         }
                     }
-                    KeyCode::Tab | KeyCode::Left | KeyCode::Right => {
+                    KeyCode::Tab => {
                         if self.current_view == View::Details {
                             if self.details_tab_index == 0 {
                                 self.details_tab_index = 1;
@@ -438,44 +461,33 @@ impl App {
                             self.details_scroll_size = None;
                         }
                     }
-                    KeyCode::Char(' ') => {
+                    KeyCode::Char('n') => {
                         if self.current_view == View::Details {
                             self.selected_traffic_index =
                                 next_idx(self.traffics.len(), self.selected_traffic_index);
                             self.update_current_traffic();
                         }
                     }
+                    KeyCode::Char('p') => {
+                        if self.current_view == View::Details {
+                            self.selected_traffic_index =
+                                prev_idx(self.traffics.len(), self.selected_traffic_index);
+                            self.update_current_traffic();
+                        }
+                    }
                     KeyCode::Char('c') => {
-                        if self.current_popup.is_none() {
-                            if self.selected_traffic().is_none() {
-                                self.notify("No traffic selected", true);
-                            } else {
-                                self.current_popup = Some(Popup::Copy(0));
-                            }
+                        if self.current_popup.is_none() && self.selected_traffic().is_some() {
+                            self.current_popup = Some(Popup::Copy(0));
                         }
                     }
                     KeyCode::Char('e') => {
-                        if self.current_popup.is_none() {
-                            if self.traffics.is_empty() {
-                                self.notify("No traffics", true);
-                            } else {
-                                self.current_popup = Some(Popup::Export(0));
-                            }
+                        if self.current_popup.is_none() && !self.traffics.is_empty() {
+                            self.current_popup = Some(Popup::Export(0));
                         }
                     }
                     KeyCode::Char('/') => {
                         if self.current_view == View::Main {
                             self.input_mode = true;
-                        }
-                    }
-                    KeyCode::Char('y') => {
-                        if let Some(Confirm::Quit) = self.current_confirm {
-                            self.should_quit = true;
-                        }
-                    }
-                    KeyCode::Char('n') => {
-                        if self.current_confirm.is_some() {
-                            self.current_confirm = None;
                         }
                     }
                     _ => {}
@@ -562,11 +574,23 @@ impl App {
         } else {
             let width = area.width - 4;
             let rows = traffics.into_iter().map(|head| {
-                let head_text = generate_title(head, width);
-                [Cell::from(head_text)]
-                    .into_iter()
-                    .collect::<Row>()
-                    .height(2)
+                let title = format!("{} {}", head.method, head.uri);
+                let description = match head.status {
+                    Some(status) => {
+                        let padding = " ".repeat(head.method.len());
+                        let mime = &head.mime;
+                        let size = format_size(head.size.map(|v| v as _));
+                        let time_delta = format_time_delta(head.time.map(|v| v as _));
+                        format!("{padding} ← {status} {mime} {size} {time_delta}")
+                    }
+                    None => "".to_string(),
+                };
+                let text = format!(
+                    "{}\n{}",
+                    ellipsis_tail(&title, width),
+                    ellipsis_tail(&description, width)
+                );
+                [Cell::from(text)].into_iter().collect::<Row>().height(2)
             });
 
             let table = Table::new(rows, [Constraint::Percentage(100)])
@@ -595,13 +619,11 @@ impl App {
         let Some(head) = self.selected_traffic() else {
             return;
         };
-        let chunks = Layout::vertical([Constraint::Length(2), Constraint::Min(0)]).split(area);
-        let title = generate_title(head, area.width);
-        frame.render_widget(Text::from(title), chunks[0]);
 
-        let is_req = self.details_tab_index == 0;
         let traffics = self.filtered_traffics();
         let traffics_len = traffics.len();
+
+        let is_req = self.details_tab_index == 0;
 
         let (request_style, response_style) = if is_req {
             (SELECTED_STYLE, Style::default())
@@ -622,52 +644,78 @@ impl App {
             Span::styled(tab_second_title, response_style),
             Span::raw(" "),
         ]));
+
         if !traffics.is_empty() {
             let pagination = format!("[{}/{traffics_len}]", self.selected_traffic_index + 1);
             block = block.title_bottom(Line::raw(pagination).alignment(Alignment::Right));
         }
+
+        let mut lines = vec![];
+
+        let mut headers = None;
+        let mut body = None;
+
         let width = area.width - 2;
-        let mut texts = vec![];
-        let (headers, body) = if is_req {
-            (&traffic.req_headers, req_body)
+
+        lines.push(Line::raw(format!("{} {}", head.method, head.uri)));
+        let mut head_parts = vec![];
+        if let Some(version) = &traffic.http_version {
+            head_parts.push(version.clone());
+        }
+        if let Some(code) = head.status.and_then(|v| StatusCode::from_u16(v).ok()) {
+            head_parts.push(code.as_str().to_string());
+            if let Some(reason) = code.canonical_reason() {
+                head_parts.push(reason.to_string());
+            }
+        }
+        lines.push(Line::raw(head_parts.join(" ")));
+
+        if is_req {
+            headers = traffic.req_headers.as_ref();
+            body = req_body.as_ref();
         } else if let Some(error) = &traffic.error {
-            texts.push(Line::raw(error));
-            (&None, &None)
+            lines.push(horizontal_line("ERROR", width as _));
+            lines.push(Line::raw(error));
         } else {
-            (&traffic.res_headers, res_body)
+            headers = traffic.res_headers.as_ref();
+            body = res_body.as_ref();
         };
+
         if let Some(headers) = headers {
+            lines.push("".into());
+            lines.push(horizontal_line("HEADERS", width as _));
             for header in &headers.items {
-                texts.push(Line::raw(format!("{}: {}", header.name, header.value)));
+                lines.push(Line::raw(format!("{}: {}", header.name, header.value)));
             }
         }
         if let Some(body) = body {
-            texts.push(Line::raw("—".repeat(width as _)));
+            lines.push("".into());
+            lines.push(horizontal_line("BODY", width as _));
             if body.is_utf8() {
-                texts.extend(body.value.lines().map(Line::raw));
+                lines.extend(body.value.lines().map(Line::raw));
             } else {
-                texts.push(Line::raw(&body.value).style(Style::default().underlined()));
+                lines.push(Line::raw(&body.value).style(Style::default().underlined()));
             }
         }
-        let paragraph = Paragraph::new(texts)
+        let paragraph = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((self.details_scroll_offset, 0));
         let scroll_size = match self.details_scroll_size {
             Some(v) => v,
             None => {
-                let value = (paragraph.line_count(width) as u16).saturating_sub(chunks[1].height);
+                let value = (paragraph.line_count(width) as u16).saturating_sub(area.height);
                 self.details_scroll_size = Some(value);
                 value
             }
         };
-        frame.render_widget(paragraph, chunks[1]);
+        frame.render_widget(paragraph, area);
         if scroll_size > 0 {
             frame.render_stateful_widget(
                 Scrollbar::new(ScrollbarOrientation::VerticalRight)
                     .begin_symbol(Some("↑"))
                     .end_symbol(Some("↓")),
-                chunks[1],
+                area,
                 &mut ScrollbarState::new(scroll_size as _)
                     .position(self.details_scroll_offset as _),
             );
@@ -784,26 +832,6 @@ impl App {
     }
 }
 
-fn generate_title(head: &TrafficHead, width: u16) -> String {
-    let title = format!("{} {}", head.method, head.uri);
-    let description = match head.status {
-        Some(status) => {
-            let padding = " ".repeat(head.method.len());
-            let mime = &head.mime;
-            let size = format_size(head.size.map(|v| v as _));
-            let time_delta = format_time_delta(head.time.map(|v| v as _));
-            format!("{padding} ← {status} {mime} {size} {time_delta}")
-        }
-        None => "".to_string(),
-    };
-    let head_text = format!(
-        "{}\n{}",
-        ellipsis_tail(&title, width),
-        ellipsis_tail(&description, width)
-    );
-    head_text
-}
-
 fn popup_absolute_area(area: Rect, width: u16, height: u16) -> Rect {
     let popup_layout = Layout::default()
         .direction(Direction::Vertical)
@@ -830,6 +858,15 @@ fn popup_absolute_area(area: Rect, width: u16, height: u16) -> Rect {
         .split(popup_layout[1])[1]
 }
 
+fn horizontal_line(title: &str, width: usize) -> Line {
+    Line::from(vec![
+        ">>>> ".into(),
+        Span::raw(title).style(Style::default().bold()),
+        " <<<<".into(),
+        "-".repeat(width - title.width() - 10).into(),
+    ])
+}
+
 #[derive(Debug, Clone, PartialEq)]
 enum View {
     Main,
@@ -850,7 +887,8 @@ impl View {
             View::Details => &[
                 ("↹", "Switch"),
                 ("⇅", "Scroll"),
-                ("␣", "Next"),
+                ("n", "Next"),
+                ("p", "Prev"),
                 ("c", "Copy"),
                 ("e", "Export"),
                 ("q", "Back"),

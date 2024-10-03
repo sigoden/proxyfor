@@ -92,7 +92,7 @@ pub fn format_time_delta(delta: Option<u64>) -> String {
 }
 
 pub fn next_idx(len: usize, idx: usize) -> usize {
-    if idx >= len - 1 {
+    if idx >= len.saturating_sub(1) {
         0
     } else {
         idx + 1
@@ -101,7 +101,7 @@ pub fn next_idx(len: usize, idx: usize) -> usize {
 
 pub fn prev_idx(len: usize, idx: usize) -> usize {
     if idx == 0 {
-        len - 1
+        len.saturating_sub(1)
     } else {
         idx - 1
     }
