@@ -442,6 +442,7 @@ impl Server {
 
         let Some((messages, receiver)) = self.state.subscribe_websocket(id).await else {
             *res.status_mut() = StatusCode::NOT_FOUND;
+            set_res_body(res, "Not found websocket");
             return Ok(());
         };
 

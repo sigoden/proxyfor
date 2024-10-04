@@ -1,7 +1,6 @@
 use crate::utils::*;
 
 use anyhow::{bail, Result};
-use base64::{engine::general_purpose::STANDARD, Engine as _};
 use http::{HeaderMap, StatusCode, Version};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -232,6 +231,7 @@ impl Traffic {
             size: self.res_body_size,
             time: self.time(),
             mime: extract_mime(&self.res_headers).to_string(),
+            websocket_id: self.websocket_id,
         }
     }
 
@@ -331,6 +331,8 @@ pub struct TrafficHead {
     pub size: Option<u64>,
     pub time: Option<u64>,
     pub mime: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub websocket_id: Option<usize>,
 }
 
 impl TrafficHead {
@@ -443,7 +445,7 @@ impl Body {
             Ok(text) => Self::text(text),
             Err(_) => Body {
                 encode: "base64".to_string(),
-                value: STANDARD.encode(data),
+                value: base64_encode(data),
                 size: size as _,
             },
         }

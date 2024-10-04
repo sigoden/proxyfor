@@ -1,5 +1,6 @@
 use anyhow::Result;
 use async_compression::tokio::bufread::{BrotliDecoder, DeflateDecoder, GzipDecoder, ZstdDecoder};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::Serializer;
 use std::sync::{Arc, LazyLock};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -18,6 +19,10 @@ pub const ENCODING_EXTS: [(&str, &str); 4] = [
 
 static CLIPBOARD: LazyLock<Arc<std::sync::Mutex<Option<arboard::Clipboard>>>> =
     LazyLock::new(|| std::sync::Arc::new(std::sync::Mutex::new(arboard::Clipboard::new().ok())));
+
+pub fn base64_encode(data: &[u8]) -> String {
+    STANDARD.encode(data)
+}
 
 pub fn ellipsis_tail(text: &str, width: u16) -> String {
     let width = width as _;

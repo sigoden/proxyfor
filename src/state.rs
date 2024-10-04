@@ -22,7 +22,7 @@ pub struct State {
 
 impl State {
     pub fn new(print_mode: PrintMode) -> Self {
-        let (traffics_notifier, _) = broadcast::channel(16);
+        let (traffics_notifier, _) = broadcast::channel(128);
         let (websockets_notifier, _) = broadcast::channel(64);
         Self {
             print_mode,
@@ -183,14 +183,14 @@ impl State {
         let _ = self.websockets_notifier.send((id, message));
     }
 
-    pub async fn subscribe_websocket(&self, id: usize) -> Option<SubscribeWebSocket> {
+    pub async fn subscribe_websocket(&self, id: usize) -> Option<SubscribedWebSocket> {
         let websockets = self.websockets.lock().await;
         let messages = websockets.get(&id)?;
         Some((messages.to_vec(), self.websockets_notifier.subscribe()))
     }
 }
 
-pub type SubscribeWebSocket = (
+pub type SubscribedWebSocket = (
     Vec<WebsocketMessage>,
     broadcast::Receiver<(usize, WebsocketMessage)>,
 );
@@ -206,7 +206,7 @@ pub enum WebsocketMessage {
 #[derive(Debug, Clone, Serialize)]
 pub struct WebsocketData {
     #[serde(serialize_with = "crate::utils::serialize_datetime")]
-    create: OffsetDateTime,
-    server_to_client: bool,
-    body: Body,
+    pub create: OffsetDateTime,
+    pub server_to_client: bool,
+    pub body: Body,
 }
