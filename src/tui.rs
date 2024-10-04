@@ -1,6 +1,6 @@
 use crate::{
-    state::State,
-    traffic::{Body, Traffic, TrafficHead},
+    state::{State, SubscribedWebSocket, WebsocketMessage},
+    traffic::{Body, Headers, Traffic, TrafficHead},
     utils::*,
 };
 
@@ -34,6 +34,7 @@ const TICK_INTERVAL: u64 = 250;
 const MESSAGE_TIMEOUT: u64 = 5000;
 const LARGE_WIDTH: u16 = 100;
 const SELECTED_STYLE: Style = Style::new().bg(GRAY.c800).add_modifier(Modifier::BOLD);
+const BOLD_STYLE: Style = Style::new().add_modifier(Modifier::BOLD);
 const EXPORT_ALL_TRAFFICS: &str = "proxyfor_all_traffics";
 
 const COPY_ACTIONS: [(&str, &str); 5] = [
@@ -88,6 +89,7 @@ struct App {
     details_scroll_size: Option<u16>,
     current_view: View,
     current_traffic: Option<Box<TrafficDetails>>,
+    current_websocket: Option<Box<SubscribedWebSocket>>,
     current_popup: Option<Popup>,
     current_confirm: Option<Confirm>,
     current_notifier: Option<Notifier>,
@@ -111,6 +113,7 @@ impl App {
             details_scroll_size: None,
             current_view: View::Main,
             current_traffic: None,
+            current_websocket: None,
             current_popup: None,
             current_confirm: None,
             current_notifier: None,
@@ -129,6 +132,10 @@ impl App {
         let tick_rate = Duration::from_millis(TICK_INTERVAL);
         let mut last_tick = Instant::now();
         loop {
+            if self.should_quit {
+                break;
+            }
+
             terminal.draw(|frame| self.draw(frame))?;
 
             let timeout = tick_rate
@@ -139,19 +146,17 @@ impl App {
                 self.handle_message(message);
             }
 
+            self.handle_websocket_message();
+
             self.handle_events(timeout)?;
-
-            if self.should_quit {
-                break;
-            }
-
-            if last_tick.elapsed() >= tick_rate {
-                last_tick = Instant::now();
-            }
 
             self.maybe_clear_notifier();
 
             self.step += 1;
+
+            if last_tick.elapsed() >= tick_rate {
+                last_tick = Instant::now();
+            }
         }
         Ok(())
     }
@@ -213,11 +218,13 @@ impl App {
     }
 
     fn update_current_traffic(&mut self) {
-        let Some(traffic_id) = self.selected_traffic().map(|v| v.id) else {
+        let Some(head) = self.selected_traffic() else {
             return;
         };
         let state = self.state.clone();
         let message_tx = self.message_tx.clone();
+        let traffic_id = head.id;
+        let websocket_id = head.websocket_id;
         tokio::spawn(async move {
             let Some(traffic) = state.get_traffic(traffic_id).await else {
                 return;
@@ -226,7 +233,18 @@ impl App {
             let _ = message_tx.send(Message::TrafficDetails(Box::new((
                 traffic, req_body, res_body,
             ))));
+
+            if let Some(websocket_id) = websocket_id {
+                if let Some(subscribed_websocket) = state.subscribe_websocket(websocket_id).await {
+                    let _ = message_tx
+                        .send(Message::SubscribedWebSocket(Box::new(subscribed_websocket)));
+                }
+            };
         });
+        if self.details_tab_index == 2 && websocket_id.is_none() {
+            self.details_tab_index = 0;
+        }
+        self.current_websocket = None;
         self.details_scroll_offset = 0;
         self.details_scroll_size = None;
     }
@@ -315,8 +333,20 @@ impl App {
                 self.details_scroll_offset = 0;
                 self.details_scroll_size = None;
             }
+            Message::SubscribedWebSocket(subscribed_websocket) => {
+                self.current_websocket = Some(subscribed_websocket);
+            }
             Message::Error(error) => self.notify(&error, true),
             Message::Info(info) => self.notify(&info, false),
+        }
+    }
+
+    fn handle_websocket_message(&mut self) {
+        let Some((messages, receiver)) = self.current_websocket.as_deref_mut() else {
+            return;
+        };
+        while let Ok((_, message)) = receiver.try_recv() {
+            messages.push(message);
         }
     }
 
@@ -371,6 +401,7 @@ impl App {
                                 }
                                 View::Details => {
                                     self.current_traffic = None;
+                                    self.current_websocket = None;
                                     self.current_view = View::Main;
                                 }
                             }
@@ -454,6 +485,10 @@ impl App {
                         if self.current_view == View::Details {
                             if self.details_tab_index == 0 {
                                 self.details_tab_index = 1;
+                            } else if self.details_tab_index == 1
+                                && self.current_websocket.is_some()
+                            {
+                                self.details_tab_index = 2;
                             } else {
                                 self.details_tab_index = 0;
                             }
@@ -600,124 +635,78 @@ impl App {
 
             frame.render_stateful_widget(table, area, &mut table_state);
 
-            traffics_len > (area.height.saturating_sub(1) / 2) as usize
+            let sub = if area.height % 2 == 0 { 2 } else { 3 };
+            traffics_len > (area.height.saturating_sub(sub) / 2) as usize
         };
 
         if show_scrollbar {
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(Some("↑"))
-                    .end_symbol(Some("↓")),
-                area,
-                &mut ScrollbarState::new(traffics_len as _)
-                    .position(self.selected_traffic_index as _),
-            );
+            render_scrollbar(frame, area, traffics_len, self.selected_traffic_index);
         }
     }
 
     fn render_details_view(&mut self, frame: &mut Frame, area: Rect) {
-        let Some(head) = self.selected_traffic() else {
+        let Some((traffic, req_body, res_body)) = self.current_traffic.as_deref() else {
             return;
         };
 
         let traffics = self.filtered_traffics();
         let traffics_len = traffics.len();
 
-        let is_req = self.details_tab_index == 0;
-
-        let (request_style, response_style) = if is_req {
-            (SELECTED_STYLE, Style::default())
-        } else {
-            (Style::default(), SELECTED_STYLE)
-        };
-        let Some((traffic, req_body, res_body)) = self.current_traffic.as_deref() else {
-            return;
-        };
-        let tab_second_title = match &traffic.error {
-            Some(_) => "Error",
-            None => "Response",
-        };
-        let mut block = Block::bordered().title(Line::from(vec![
-            Span::raw(" "),
-            Span::styled("Request", request_style),
-            Span::raw(" / "),
-            Span::styled(tab_second_title, response_style),
-            Span::raw(" "),
-        ]));
+        let title_spans = build_details_title_spans(traffic, self.details_tab_index);
+        let mut block = Block::bordered().title(Line::from(title_spans));
 
         if !traffics.is_empty() {
             let pagination = format!("[{}/{traffics_len}]", self.selected_traffic_index + 1);
             block = block.title_bottom(Line::raw(pagination).alignment(Alignment::Right));
         }
 
-        let mut lines = vec![];
+        let width = (area.width.saturating_sub(2)) as usize;
+        let mut lines = build_details_head_lines(traffic);
 
-        let mut headers = None;
-        let mut body = None;
-
-        let width = area.width - 2;
-
-        lines.push(Line::raw(format!("{} {}", head.method, head.uri)));
-        let mut head_parts = vec![];
-        if let Some(version) = &traffic.http_version {
-            head_parts.push(version.clone());
-        }
-        if let Some(code) = head.status.and_then(|v| StatusCode::from_u16(v).ok()) {
-            head_parts.push(code.as_str().to_string());
-            if let Some(reason) = code.canonical_reason() {
-                head_parts.push(reason.to_string());
+        match self.details_tab_index {
+            0 => {
+                lines.extend(build_headers_lines(traffic.req_headers.as_ref(), width));
+                lines.extend(build_body_lines(req_body.as_ref(), "BODY", width));
             }
-        }
-        lines.push(Line::raw(head_parts.join(" ")));
-
-        if is_req {
-            headers = traffic.req_headers.as_ref();
-            body = req_body.as_ref();
-        } else if let Some(error) = &traffic.error {
-            lines.push(horizontal_line("ERROR", width as _));
-            lines.push(Line::raw(error));
-        } else {
-            headers = traffic.res_headers.as_ref();
-            body = res_body.as_ref();
-        };
-
-        if let Some(headers) = headers {
-            lines.push("".into());
-            lines.push(horizontal_line("HEADERS", width as _));
-            for header in &headers.items {
-                lines.push(Line::raw(format!("{}: {}", header.name, header.value)));
+            1 => match &traffic.error {
+                Some(error) => {
+                    lines.extend(build_error_lines(error, width));
+                }
+                None => {
+                    lines.extend(build_headers_lines(traffic.res_headers.as_ref(), width));
+                    lines.extend(build_body_lines(res_body.as_ref(), "BODY", width));
+                }
+            },
+            2 => {
+                if let Some((messages, _)) = self.current_websocket.as_deref() {
+                    for message in messages {
+                        lines.extend(build_websocket_message_lines(message, width));
+                    }
+                }
             }
+            _ => {}
         }
-        if let Some(body) = body {
-            lines.push("".into());
-            lines.push(horizontal_line("BODY", width as _));
-            if body.is_utf8() {
-                lines.extend(body.value.lines().map(Line::raw));
-            } else {
-                lines.push(Line::raw(&body.value).style(Style::default().underlined()));
-            }
-        }
+
         let paragraph = Paragraph::new(lines)
             .block(block)
             .wrap(Wrap { trim: false })
             .scroll((self.details_scroll_offset, 0));
+
         let scroll_size = match self.details_scroll_size {
-            Some(v) => v,
-            None => {
-                let value = (paragraph.line_count(width) as u16).saturating_sub(area.height);
+            Some(v) if self.details_tab_index != 2 => v,
+            _ => {
+                let value = (paragraph.line_count(width as u16) as u16).saturating_sub(area.height);
                 self.details_scroll_size = Some(value);
                 value
             }
         };
         frame.render_widget(paragraph, area);
         if scroll_size > 0 {
-            frame.render_stateful_widget(
-                Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                    .begin_symbol(Some("↑"))
-                    .end_symbol(Some("↓")),
+            render_scrollbar(
+                frame,
                 area,
-                &mut ScrollbarState::new(scroll_size as _)
-                    .position(self.details_scroll_offset as _),
+                (scroll_size + 1) as _,
+                self.details_scroll_offset as _,
             );
         }
     }
@@ -818,7 +807,7 @@ impl App {
         let space = if self.input_mode { " " } else { "" };
         let line = Line::raw(format!("|search: {}{}|", self.search_input.value(), space));
         let frame_area = frame.area();
-        let y = frame_area.height - 2;
+        let y = frame_area.height.saturating_sub(2);
         let w: u16 = line.width() as _;
         let area = Rect {
             x: 1,
@@ -830,6 +819,18 @@ impl App {
         frame.render_widget(line, area);
         frame.set_cursor_position((w.saturating_sub(1), y));
     }
+}
+
+fn render_scrollbar(frame: &mut Frame, area: Rect, len: usize, index: usize) {
+    let begin_symbol = if index == 0 { "⤒" } else { "↑" };
+    let end_symbol = if index == len - 1 { "⤓" } else { "↓" };
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some(begin_symbol))
+            .end_symbol(Some(end_symbol)),
+        area,
+        &mut ScrollbarState::new(len).position(index),
+    );
 }
 
 fn popup_absolute_area(area: Rect, width: u16, height: u16) -> Rect {
@@ -858,12 +859,99 @@ fn popup_absolute_area(area: Rect, width: u16, height: u16) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn horizontal_line(title: &str, width: usize) -> Line {
+fn build_details_title_spans(traffic: &Traffic, selected: usize) -> Vec<Span<'static>> {
+    let tabs = if traffic.websocket_id.is_some() {
+        vec!["Request", "Response", "WebSocket"]
+    } else if traffic.error.is_some() {
+        vec!["Request", "Error"]
+    } else {
+        vec!["Request", "Response"]
+    };
+    let mut spans = vec![];
+    for (i, tab) in tabs.into_iter().enumerate() {
+        let mut span = Span::raw(format!(" {tab} "));
+        if i == selected {
+            span = span.style(SELECTED_STYLE)
+        }
+        spans.push(span);
+        if i != spans.len() - 1 {
+            spans.push(Span::raw(" / "));
+        }
+    }
+    spans
+}
+
+fn build_details_head_lines(traffic: &Traffic) -> Vec<Line> {
+    let mut lines = vec![];
+    lines.push(Line::raw(format!("{} {}", traffic.method, traffic.uri)));
+    let mut head_parts = vec![];
+    if let Some(version) = &traffic.http_version {
+        head_parts.push(version.clone());
+    }
+    if let Some(code) = traffic.status.and_then(|v| StatusCode::from_u16(v).ok()) {
+        head_parts.push(code.as_str().to_string());
+        if let Some(reason) = code.canonical_reason() {
+            head_parts.push(reason.to_string());
+        }
+    }
+    lines.push(Line::raw(head_parts.join(" ")));
+    lines
+}
+
+fn build_headers_lines(headers: Option<&Headers>, width: usize) -> Vec<Line> {
+    let Some(headers) = headers else {
+        return vec![];
+    };
+    let mut lines = vec!["".into(), build_horizontal_line("HEADERS", width as _)];
+    for header in &headers.items {
+        lines.push(Line::raw(format!("{}: {}", header.name, header.value)));
+    }
+    lines
+}
+
+fn build_body_lines<'a>(
+    body: Option<&'a Body>,
+    title: &'static str,
+    width: usize,
+) -> Vec<Line<'a>> {
+    let Some(body) = body else {
+        return vec![];
+    };
+    let mut lines = vec!["".into(), build_horizontal_line(title, width)];
+    if body.is_utf8() {
+        lines.extend(body.value.lines().map(Line::raw));
+    } else {
+        lines.push(Line::raw(&body.value).underlined());
+    }
+    lines
+}
+
+fn build_error_lines(error: &str, width: usize) -> Vec<Line> {
+    let mut lines = vec!["".into(), build_horizontal_line("ERROR", width)];
+    lines.push(Line::raw(error));
+    lines
+}
+
+fn build_websocket_message_lines(message: &WebsocketMessage, width: usize) -> Vec<Line> {
+    match message {
+        WebsocketMessage::Error(error) => build_error_lines(error, width),
+        WebsocketMessage::Data(data) => {
+            let title = match data.server_to_client {
+                true => "Server → Client",
+                false => "Client → Server",
+            };
+            build_body_lines(Some(&data.body), title, width)
+        }
+    }
+}
+
+fn build_horizontal_line(title: &'static str, width: usize) -> Line {
     Line::from(vec![
         ">>>> ".into(),
-        Span::raw(title).style(Style::default().bold()),
+        Span::raw(title).style(BOLD_STYLE),
         " <<<<".into(),
-        "-".repeat(width - title.width() - 10).into(),
+        "-".repeat(width.saturating_sub(title.width()).saturating_sub(10))
+            .into(),
     ])
 }
 
@@ -901,6 +989,7 @@ impl View {
 enum Message {
     TrafficHead(TrafficHead),
     TrafficDetails(Box<TrafficDetails>),
+    SubscribedWebSocket(Box<SubscribedWebSocket>),
     Info(String),
     Error(String),
 }

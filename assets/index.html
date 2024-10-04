@@ -313,6 +313,7 @@
         }
 
         @media (max-width: 1000px) {
+
             .col-status,
             .col-type,
             .col-size,
@@ -421,6 +422,7 @@
          * @property {?number} size
          * @property {?number} time
          * @property {string} mime
+         * @property {?number} websocket_id
          */
 
         /**
@@ -987,7 +989,7 @@
             let date = formatDate(new Date(data.create));
             let value = data.body.value;
             if (data.body.encode == "base64") {
-                value = `data:;base64,${value}`;
+                value = base64ToText(data.body.value);
             }
             return `<div class="ws-msg">
                 <small>${arrow}<span class="ws-date">${date}</span></small>
@@ -1066,24 +1068,38 @@
             return value.startsWith('x-') ? value.substring(2) : value;
         }
 
+        /**
+         * @param {string} base64String
+         * @param {string} contentType
+         */
         function base64ToBlob(base64String, contentType) {
-            const byteCharacters = atob(base64String);
-            const byteArrays = [];
+            const byteArrays= base64ToUint8Array(base64String);
+            return new Blob([byteArrays], { type: contentType });
+        }
 
-            for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-                const slice = byteCharacters.slice(offset, offset + 512);
+        /**
+         * @param {string} base64String
+         */
+        function base64ToText(base64String) {
+            const byteArrays= base64ToUint8Array(base64String);
+            const decoder = new TextDecoder('utf-8');
+            return decoder.decode(byteArrays);
+        }
 
-                const byteNumbers = new Array(slice.length);
-                for (let i = 0; i < slice.length; i++) {
-                    byteNumbers[i] = slice.charCodeAt(i);
-                }
+        /**
+         * @param {string} base64String
+         */
+        function base64ToUint8Array(base64String) {
+            const binaryString = atob(base64String);
 
-                const byteArray = new Uint8Array(byteNumbers);
-                byteArrays.push(byteArray);
+            const length = binaryString.length;
+            const bytes = new Uint8Array(length);
+
+            for (let i = 0; i < length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
             }
 
-            return new Blob(byteArrays, { type: contentType });
-
+            return bytes;
         }
 
         function formatSize(len) {
