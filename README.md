@@ -58,7 +58,7 @@ $ curl -x http://127.0.0.1:8080 httpbin.org/ip
 
 ### Reverse Proxy
 
-The client directly requests `http://127.0.0.1:8080`.
+The client accesses to `http://127.0.0.1:8080/*`.
 
 **This mode is suitable for scenarios where client cannot set a proxy.**
 
