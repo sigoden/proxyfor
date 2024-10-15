@@ -262,7 +262,7 @@ impl Server {
             return Ok(res);
         }
 
-        let mut traffic = Traffic::new(&req_uri, method.as_str());
+        let mut traffic = Traffic::new(&uri, method.as_str());
 
         traffic.check_match(is_match_title(
             &self.title_filters,
