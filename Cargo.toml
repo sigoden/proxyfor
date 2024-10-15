@@ -3,12 +3,12 @@ name = "proxyfor"
 version = "0.3.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
-description = "A lightweight proxy for capturing HTTP(S) and WS(S) traffic."
+description = "A proxy CLI for capturing HTTP(S) & WS(S) Traffic."
 license = "MIT OR Apache-2.0"
 homepage = "https://github.com/sigoden/proxyfor"
 repository = "https://github.com/sigoden/proxyfor"
 categories = ["command-line-utilities"]
-keywords = ["proxy", "mitm", "https", "http"]
+keywords = ["proxy", "cli", "http", "websocket", "tui"]
 
 [dependencies]
 anyhow = "1.0"
@@ -25,7 +25,7 @@ http-body-util = "0.1"
 hyper = { version = "1.0", features = ["full"] }
 hyper-rustls = { version = "0.27.3", default-features = false, features = ["webpki-roots", "webpki-tokio", "ring", "http1", "http2", "tls12"] }
 hyper-util = { version = "0.1", features = ["server-auto", "client-legacy"] }
-hyper-tungstenite = "0.14.0"
+hyper-tungstenite = "0.15.0"
 indexmap = { version = "2.2.5", features = ["serde"] }
 moka = { version = "0.12.5", features = ["future"] }
 pin-project-lite = "0.2.13"
@@ -37,11 +37,11 @@ serde = { version = "1.0.197", features = ["derive"] }
 serde_json = { version = "1.0.114", features = ["preserve_order"] }
 time = "0.3.34"
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "fs", "io-util", "signal"]}
-tokio-graceful = "0.1.6"
+tokio-graceful = "0.2.2"
 tokio-util = { version = "0.7",  features = ["io-util", "compat"] }
 tokio-rustls = { version = "0.26.0", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-stream = { version = "0.1.14", default-features = false, features = ["sync"] }
-tokio-tungstenite = { version = "0.23.1", features = ["rustls", "rustls-tls-webpki-roots"] }
+tokio-tungstenite = { version = "0.24.0", features = ["rustls", "rustls-tls-webpki-roots"] }
 url = "2.5.0"
 crossterm = "0.28.1"
 ratatui = { version = "0.28.1", features = ["unstable-rendered-line-info"] }

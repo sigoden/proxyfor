@@ -4,30 +4,28 @@
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
 [![Docker Pulls](https://img.shields.io/docker/pulls/sigoden/proxyfor)](https://hub.docker.com/r/sigoden/proxyfor)
 
-A lightweight proxy for capturing HTTP(S) and WS(S) traffic.
+A proxy CLI for capturing HTTP(S) & WS(S) Traffic.
 
 ## Features
 
-- Support forward/reverse proxy
-- Support filtering
-- Support HTTP/HTTPS/WS/WSS protocols
-- Integrate terminal user interface (TUI)
-- Integrate web user interface (WebUI)
-- Integrate certificates installation webapp
-- Capture req/res bodies in a non-blocking, streaming manner
-- Export in Markdown, cURL, or HAR formats
-- Written in Rust, offering a single executable with no external dependencies
+- Supports forward/reverse proxy
+- Supports HTTP/HTTPS/WS/WSS protocols
+- Supports filtering & searching
+- Provides terminal user interface (TUI)
+- Provides web user interface (WebUI)
+- Provides CA certificates installation tool
+- Enables export in Markdown, cURL, or HAR formats
+- Captures request/response in a non-blocking, streaming way
+
+> Proxyfor, written in Rust, is distributed as a single executable file for Windows, macOS, and Linux, requiring no further installation steps or dependencies.
 
 ## Screenshots
 
 **Terminal User Inferace**
-![proxyfor-tui](https://github.com/user-attachments/assets/01db8ada-0b0c-4ddc-bc3f-045cfdb67d64)
+![proxyfor-tui](https://github.com/user-attachments/assets/87a93e09-4783-4273-85b6-002762909fc3)
 
 **Web User Inferace**
-![proxyfor-webui](https://github.com/user-attachments/assets/b13ffe34-69e5-4513-b904-243c391528b2)
-
-**Dump all traffics**
-![proxyfor-dump](https://github.com/user-attachments/assets/eca3b38c-c2e9-404e-8990-e34feee7ae3c)
+![proxyfor-webui](https://github.com/user-attachments/assets/4f1f921a-95ec-44e0-8a2f-671614c0b934)
 
 ## Installation
 
@@ -93,11 +91,10 @@ Options:
 You can select different interfaces with the following commands:
 
 ```sh
-proxyfor                   # Enter TUI
+proxyfor                   # Enter TUI, equal to `proxyfor --tui`
 proxyfor --web             # Serve WebUI
-proxyfor --dump            # Dump all traffics
 proxyfor --web --tui       # Serve WebUI + Enter TUI
-proxyfor --web --dump      # Serve WebUI + Dump all traffics
+proxyfor --dump            # Dump all traffics to console
 proxyfor > proxyfor.md     # Dump all traffics to markdown file
 ```
 
@@ -106,12 +103,12 @@ proxyfor > proxyfor.md     # Dump all traffics to markdown file
 You can specify different listening addresses:
 
 ```sh
-proxyfor -l 18080
+proxyfor -l 8081
 proxyfor -l 127.0.0.1
-proxyfor -l 127.0.0.1:18080
+proxyfor -l 127.0.0.1:8081
 ```
 
-### Filtering Traffic
+### Applying Filter
 
 Filter traffic by setting method and URI:
 
