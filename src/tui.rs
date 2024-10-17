@@ -817,7 +817,9 @@ impl App {
         };
         frame.render_widget(Clear, area);
         frame.render_widget(line, area);
-        frame.set_cursor_position((w.saturating_sub(1), y));
+        if self.input_mode {
+            frame.set_cursor_position((w.saturating_sub(1), y));
+        }
     }
 }
 
