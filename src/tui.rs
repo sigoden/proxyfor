@@ -1,6 +1,6 @@
 use crate::{
     state::{State, SubscribedWebSocket, WebsocketMessage},
-    traffic::{Body, Headers, Traffic, TrafficHead},
+    traffic::{get_header_value, Body, Headers, Traffic, TrafficHead},
     utils::*,
 };
 
@@ -328,7 +328,8 @@ impl App {
                     self.traffics.push(head);
                 }
             }
-            Message::TrafficDetails(details) => {
+            Message::TrafficDetails(mut details) => {
+                beautify(&mut details);
                 self.current_traffic = Some(details);
                 self.details_scroll_offset = 0;
                 self.details_scroll_size = None;
@@ -819,6 +820,32 @@ impl App {
         frame.render_widget(line, area);
         if self.input_mode {
             frame.set_cursor_position((w.saturating_sub(1), y));
+        }
+    }
+}
+
+fn beautify((traffic, req_body, res_body): &mut (Traffic, Option<Body>, Option<Body>)) {
+    beautify_body(
+        req_body,
+        get_header_value(&traffic.req_headers, "content-type"),
+    );
+    beautify_body(
+        res_body,
+        get_header_value(&traffic.res_headers, "content-type"),
+    );
+}
+
+fn beautify_body(body: &mut Option<Body>, content_type: Option<&str>) {
+    if let (Some(body), Some(content_type)) = (body, content_type) {
+        if content_type.starts_with("application/json") {
+            if let Some(beautified) = body
+                .value
+                .parse::<serde_json::Value>()
+                .ok()
+                .and_then(|v| serde_json::to_string_pretty(&v).ok())
+            {
+                *body = Body::text(&beautified);
+            }
         }
     }
 }

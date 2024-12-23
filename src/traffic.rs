@@ -631,7 +631,7 @@ pub(crate) fn extract_mime(headers: &Option<Headers>) -> &str {
         .unwrap_or_default()
 }
 
-fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a str> {
+pub(crate) fn get_header_value<'a>(headers: &'a Option<Headers>, key: &str) -> Option<&'a str> {
     headers.as_ref().and_then(|v| {
         v.items
             .iter()
