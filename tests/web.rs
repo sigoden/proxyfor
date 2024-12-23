@@ -287,9 +287,9 @@ async fn test_subscribe_websocket() -> Result<()> {
 
     assert_eq!(res.status(), 101);
 
-    ws.send(Message::Text("hello".to_string())).await?;
+    ws.send(Message::Text("hello".into())).await?;
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    ws.send(Message::Text("hello".to_string())).await?;
+    ws.send(Message::Text("hello".into())).await?;
 
     let output = fetch_subscribe(
         &format!(
