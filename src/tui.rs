@@ -600,7 +600,7 @@ impl App {
                 ],
             )
             .highlight_symbol("> ")
-            .highlight_style(SELECTED_STYLE)
+            .row_highlight_style(SELECTED_STYLE)
             .block(block);
 
             frame.render_stateful_widget(table, area, &mut table_state);
@@ -630,7 +630,7 @@ impl App {
 
             let table = Table::new(rows, [Constraint::Percentage(100)])
                 .highlight_symbol("> ")
-                .highlight_style(SELECTED_STYLE)
+                .row_highlight_style(SELECTED_STYLE)
                 .block(block);
 
             frame.render_stateful_widget(table, area, &mut table_state);
@@ -947,7 +947,7 @@ fn build_websocket_message_lines(message: &WebsocketMessage, width: usize) -> Ve
     }
 }
 
-fn build_horizontal_line(title: &'static str, width: usize) -> Line {
+fn build_horizontal_line(title: &'static str, width: usize) -> Line<'static> {
     Line::from(vec![
         ">>>> ".into(),
         Span::raw(title).style(BOLD_STYLE),

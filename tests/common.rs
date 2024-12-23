@@ -44,7 +44,7 @@ async fn test_server(req: Request<Incoming>) -> Result<Response<BoxBody<Bytes, a
                 if msg.is_close() {
                     break;
                 }
-                ws.send(Message::Text(WORLD.to_owned())).await.unwrap();
+                ws.send(Message::Text(WORLD.into())).await.unwrap();
             }
         });
 
