@@ -50,7 +50,7 @@ async fn test_websocket() -> Result<()> {
 
     assert_eq!(res.status(), 101);
 
-    ws.send(Message::Text("hello".to_owned())).await?;
+    ws.send(Message::Text("hello".into())).await?;
 
     let message = ws
         .next()
@@ -108,7 +108,7 @@ async fn test_reverse_websocket() -> Result<()> {
         tokio_tungstenite::connect_async(format!("ws://localhost:{}", proxy_addr.port())).await?;
 
     assert_eq!(res.status(), 101);
-    ws.send(Message::Text("hello".to_owned())).await?;
+    ws.send(Message::Text("hello".into())).await?;
 
     let message = ws
         .next()
