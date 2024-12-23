@@ -341,8 +341,11 @@
             }
         }
     </style>
-    <script src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
-    <script src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
+    <script defer src="https://unpkg.com/@highlightjs/cdn-assets@11.9.0/highlight.min.js"></script>
+    <script defer src="https://unpkg.com/clipboard@2/dist/clipboard.min.js"></script>
+    <script defer src="https://unpkg.com/js-beautify@1.15.1/js/lib/beautify.js"></script>
+    <script defer src="https://unpkg.com/js-beautify@1.15.1/js/lib/beautify-css.js"></script>
+    <script defer src="https://unpkg.com/js-beautify@1.15.1/js/lib/beautify-html.js"></script>
 </head>
 
 <body>
@@ -978,9 +981,10 @@
             let contentType = getContentType(headers);
             if (encode == "utf8") {
                 let language = highlightLanguage(contentType);
+                let beautifiedValue = beautify(value, language);
                 const highlightedCode = hljs.getLanguage(language)
-                    ? hljs.highlight(value, { language }).value
-                    : hljs.highlightAuto(value).value;
+                    ? hljs.highlight(beautifiedValue, { language }).value
+                    : hljs.highlightAuto(beautifiedValue).value;
                 return `<div class="code-view">
                     <pre><code class="code">${highlightedCode}</code></pre>
                     <span class="copy-btn" title="Copy">
@@ -1108,6 +1112,25 @@
 
             return value.startsWith('x-') ? value.substring(2) : value;
         }
+
+        /**
+         * @param {string} value
+         * @param {string} language
+         */
+        function beautify(value, language) {
+            let beautified = value;
+            if (language === "javascript") {
+                beautified = js_beautify(value, { indent_size: 2 });
+            } else if (language === "css") {
+                beautified = css_beautify(value, { indent_size: 2 });
+            } else if (language === "html") {
+                beautified = html_beautify(value, { indent_size: 2 });
+            } else if (language === "json") {
+                beautified = JSON.stringify(JSON.parse(value), null, 2);
+            }
+            return beautified;
+        }
+
 
         /**
          * @param {string} base64String
