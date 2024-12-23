@@ -265,6 +265,7 @@
         .code-view {
             display: flex;
             align-items: center;
+            position: relative;
         }
 
         .code-view pre {
@@ -281,6 +282,24 @@
             border-radius: 4px;
             overflow: auto;
             width: 100%;
+        }
+
+        .code-view .copy-btn {
+            cursor: pointer;
+            position: absolute;
+            display: inline-flex;
+            top: 4px;
+            right: 4px;
+            padding: 4px;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .code-view .copy-btn:hover {
+            background-color: #e4e4e4;
         }
 
         .media-view {
@@ -660,9 +679,24 @@
             });
 
             document.addEventListener("click", function (e) {
-                if (!e.target.closest(".dropdown")) {
+                const $dropdown = e.target.closest(".dropdown");
+                if (!$dropdown) {
                     $exportDropdownContent.style.display = "none";
                     $copyDropdownContent.style.display = "none";
+                }
+                const $codeCopyBtn = e.target.closest(".code-view .copy-btn");
+                if ($codeCopyBtn) {
+                    ClipboardJS.copy($codeCopyBtn.parentElement.querySelector(".code").textContent);
+
+                    const oldBtnHtml = $codeCopyBtn.innerHTML;
+                    $codeCopyBtn.innerHTML = `
+                        <svg width="16" height="16" viewBox="0 0 16 16">
+                            <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0"/>
+                        </svg>
+                    `;
+                    setTimeout(() => {
+                        $codeCopyBtn.innerHTML = oldBtnHtml;
+                    }, 2000);
                 }
             });
         }
@@ -947,7 +981,14 @@
                 const highlightedCode = hljs.getLanguage(language)
                     ? hljs.highlight(value, { language }).value
                     : hljs.highlightAuto(value).value;
-                return `<div class="code-view"><pre><code>${highlightedCode}</code></pre></div>`;
+                return `<div class="code-view">
+                    <pre><code class="code">${highlightedCode}</code></pre>
+                    <span class="copy-btn" title="Copy">
+                        <svg width="16" height="16" viewBox="0 0 16 16">
+                            <path fill-rule="evenodd" d="M4 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2zm2-1a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1zM2 5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1h1v1a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h1v1z"/>
+                        </svg>
+                    </span>
+                </div>`;
             }
             if (encode == "base64") {
                 if (
@@ -968,7 +1009,7 @@
                     return `<div class="media-view"><a href="${downloadUrl}" download="${filename}">Download the binary data</a></div>`;
                 }
             }
-            return `<div class="code-view">${value}</div>`;
+            return `<div class="code-view"><pre><code>${value}</code></pre></div>`;
         }
 
         function tmplError(error) {
@@ -1073,7 +1114,7 @@
          * @param {string} contentType
          */
         function base64ToBlob(base64String, contentType) {
-            const byteArrays= base64ToUint8Array(base64String);
+            const byteArrays = base64ToUint8Array(base64String);
             return new Blob([byteArrays], { type: contentType });
         }
 
@@ -1081,7 +1122,7 @@
          * @param {string} base64String
          */
         function base64ToText(base64String) {
-            const byteArrays= base64ToUint8Array(base64String);
+            const byteArrays = base64ToUint8Array(base64String);
             const decoder = new TextDecoder('utf-8');
             return decoder.decode(byteArrays);
         }
