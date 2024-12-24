@@ -4,27 +4,25 @@
 [![Crates](https://img.shields.io/crates/v/proxyfor.svg)](https://crates.io/crates/proxyfor)
 [![Docker Pulls](https://img.shields.io/docker/pulls/sigoden/proxyfor)](https://hub.docker.com/r/sigoden/proxyfor)
 
-A proxy CLI for capturing HTTP(S) & WS(S) Traffic.
+A powerful and flexible proxy CLI for capturing and inspecting HTTP(S) and WS(S) traffic.
 
-## Features
+## Key Features
 
-- Supports forward/reverse proxy
-- Supports HTTP/HTTPS/WS/WSS protocols
-- Supports filtering & searching
-- Provides terminal user interface (TUI)
-- Provides web user interface (WebUI)
-- Provides CA certificates installation tool
-- Enables export in Markdown, cURL, or HAR formats
-- Captures request/response in a non-blocking, streaming way
-
-> Proxyfor, written in Rust, is distributed as a single executable file for Windows, macOS, and Linux, requiring no further installation steps or dependencies.
+*   **Forward & Reverse Proxy:** Supports both forward proxy (client explicitly uses the proxy) and reverse proxy (proxy sits in front of the server).
+*   **Multi-Protocol Support:** Handles HTTP, HTTPS, WebSocket (WS), and secure WebSocket (WSS) protocols.
+*   **Flexible Filtering:** Filter traffic based on method, URI, and content-type for targeted analysis.
+*   **Multiple Interfaces:** Includes a user-friendly Terminal User Interface (TUI) and a web-based interface (WebUI) for inspecting captured data.
+*   **CA Certificate Management:** Simplifies the process of installing the necessary CA certificates to decrypt HTTPS traffic.
+*   **Export Options:** Export captured traffic in various formats, including Markdown, cURL commands, and HAR files.
+*   **Non-Blocking Streaming:** Captures request/response data in a non-blocking, streaming fashion for efficient handling of large volumes of traffic.
+*   **Cross-Platform & Standalone:** Delivered as a single, self-contained executable for Windows, macOS, and Linux, simplifying setup and distribution.
 
 ## Screenshots
 
-**Terminal User Inferace**
+**Terminal User Interface (TUI)**
 ![proxyfor-tui](https://github.com/user-attachments/assets/87a93e09-4783-4273-85b6-002762909fc3)
 
-**Web User Inferace**
+**Web User Interface (WebUI)**
 ![proxyfor-webui](https://github.com/user-attachments/assets/4f1f921a-95ec-44e0-8a2f-671614c0b934)
 
 ## Installation
@@ -45,29 +43,27 @@ docker run -v ~/.proxyfor:/.proxyfor -p 8080:8080 --rm sigoden/proxyfor --web
 
 Download from [Github Releases](https://github.com/sigoden/proxyfor/releases), unzip and add proxyfor to your $PATH.
 
-## Proxy Type
+## Proxy Modes Explained
 
 ### Forward Proxy
 
-The client sets the proxy to `http://127.0.0.1:8080`.
+In this mode, your client applications (e.g., web browsers, curl) are configured to send their requests to `proxyfor`, which then forwards them to the target servers. You would configure your client to use a proxy at `http://127.0.0.1:8080`.
 
-```sh
-$ proxyfor
-$ curl -x http://127.0.0.1:8080 httpbin.org/ip
+```bash
+proxyfor
+curl -x http://127.0.0.1:8080 httpbin.org/ip
 ```
 
 ### Reverse Proxy
 
-The client accesses to `http://127.0.0.1:8080/*`.
+In reverse proxy mode, `proxyfor` sits in front of a target server. Clients access `proxyfor` and it forwards the requests to the defined URL. This mode is ideal when clients cannot be configured to use a proxy.
 
-**This mode is suitable for scenarios where client cannot set a proxy.**
-
-```sh
-$ proxyfor https://httpbin.org
-$ curl http://127.0.0.1:8080/ip
+```bash
+proxyfor https://httpbin.org
+curl http://127.0.0.1:8080/ip
 ```
 
-## Command Line
+## Command Line Interface (CLI)
 
 ```
 Usage: proxyfor [OPTIONS] [URL]
@@ -88,7 +84,7 @@ Options:
 
 ### Choosing User Interface
 
-You can select different interfaces with the following commands:
+`proxyfor` provides several ways to interact with captured traffic:
 
 ```sh
 proxyfor                   # Enter TUI, equal to `proxyfor --tui`
@@ -98,9 +94,9 @@ proxyfor --dump            # Dump all traffics to console
 proxyfor > proxyfor.md     # Dump all traffics to markdown file
 ```
 
-###  Changing IP and Port
+### Specifying Address and Port
 
-You can specify different listening addresses:
+Customize the listening address and port:
 
 ```sh
 proxyfor -l 8081
@@ -108,30 +104,30 @@ proxyfor -l 127.0.0.1
 proxyfor -l 127.0.0.1:8081
 ```
 
-### Applying Filter
+### Filtering Traffic
 
-Filter traffic by setting method and URI:
+Apply regex filters to limit captured traffic based on method and URI:
 
 ```sh
 proxyfor -f httpbin.org/ip -f httpbin.org/anything
-proxyfor -f '/^(get|post) https:\/\/httpbin.org/'       
+proxyfor -f '/^(get|post) https:\/\/httpbin.org/'
 ```
 
-Filter traffic based on content type:
+Filter based on MIME types:
 
 ```sh
 proxyfor -m application/json -m application/ld+json
 proxyfor -m text/
 ```
 
+## CA Certificate Installation
 
-## CA Certificates
+To decrypt HTTPS traffic, you must install `proxyfor`'s CA certificate on your device. The easiest way to do this is to use the built-in certificate installation app.
 
-Proxyfor can decrypt encrypted traffic on the fly, as long as the client trusts proxyfor’s built-in certificate authority. Usually this means that the proxyfor CA certificate has to be installed on the client device.
-
-By far the easiest way to [install the proxyfor CA certificate](./assets/install-certificate.md) is to use the built-in certificate installation app.
-To do this, start proxyfor and configure your target device with the correct proxy settings.
-Now start a browser on the device, and visit the magic domain [proxyfor.local](http://proxyfor.local).
+1. Start `proxyfor` with desired proxy settings.
+2. On your target device, configure the device to use `proxyfor` as the proxy.
+3. Open a web browser on the target device and navigate to [proxyfor.local](http://proxyfor.local).
+4. Follow the on-screen instructions to download and install the CA certificate.
 
 ![proxyfor.local](https://github.com/sigoden/proxyfor/assets/4012553/a5276872-8ab1-4794-9e97-ac7038ca5e4a)
 
