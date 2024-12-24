@@ -11,7 +11,7 @@ A powerful and flexible proxy CLI for capturing and inspecting HTTP(S) and WS(S)
 *   **Forward & Reverse Proxy:** Supports both forward proxy (client explicitly uses the proxy) and reverse proxy (proxy sits in front of the server).
 *   **Multi-Protocol Support:** Handles HTTP, HTTPS, WebSocket (WS), and secure WebSocket (WSS) protocols.
 *   **Flexible Filtering:** Filter traffic based on method, URI, and content-type for targeted analysis.
-*   **Multiple Interfaces:** Includes a user-friendly Terminal User Interface (TUI) and a web-based interface (WebUI) for inspecting captured data.
+*   **Multiple User Interfaces:** Includes a user-friendly Terminal User Interface (TUI) and a web-based interface (WebUI) for inspecting captured data.
 *   **CA Certificate Management:** Simplifies the process of installing the necessary CA certificates to decrypt HTTPS traffic.
 *   **Export Options:** Export captured traffic in various formats, including Markdown, cURL commands, and HAR files.
 *   **Non-Blocking Streaming:** Captures request/response data in a non-blocking, streaming fashion for efficient handling of large volumes of traffic.
