@@ -665,9 +665,7 @@ fn map_headers(headers: &HeaderMap) -> Vec<Header> {
 fn cal_headers_size(headers: &HeaderMap) -> u64 {
     headers
         .iter()
-        .map(|(key, value)| {
-            key.as_str().as_bytes().len() as u64 + value.as_bytes().len() as u64 + 12
-        })
+        .map(|(key, value)| key.as_str().len() as u64 + value.len() as u64 + 12)
         .sum::<u64>()
         + 7
 }
