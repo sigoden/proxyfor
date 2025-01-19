@@ -10,10 +10,10 @@ A powerful and flexible proxy CLI for capturing and inspecting HTTP(S) and WS(S)
 
 - Supports forward/reverse proxy
 - Provides TUI & WebUI
-- Supports filtering & searching
+- Enables filtering & searching
 - Handles HTTP/HTTPS/WS/WSS protocols
 - Comes with a tool for installing CA certificates
-- Enables export in Markdown, cURL, or HAR formats
+- Allows export in Markdown, cURL, or HAR formats
 - Captures request/response in a non-blocking, streaming way
 - Offers a single-file portable executable for use across Windows/macOS/Linux
 
